@@ -50,7 +50,7 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
     setBusy(true); setError('');
     try {
       const form = new FormData();
-      form.append('member_id', String(me.user.member_id || ''));
+      if (me?.user?.member_id) form.append('member_id', String(me.user.member_id));
       form.append('answers', JSON.stringify(answers));
       if (note) form.append('note', note);
       if (photo) form.append('photo', photo);

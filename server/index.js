@@ -118,6 +118,43 @@ function canRegisterLevels(user) {
   return [];
 }
 
+async function resolveMemberForSubmission(user, explicitMemberId) {
+  const candidateId = Number(explicitMemberId ?? user.member_id ?? 0);
+  if (candidateId > 0) {
+    const row = await db.prepare('SELECT id FROM members WHERE id = ?').get(candidateId);
+    if (row) return candidateId;
+  }
+
+  const fullName = String(user.full_name || '').trim();
+  const nameParts = fullName.split(/\s+/).filter(Boolean);
+  const first = nameParts[0] || '';
+  const last = nameParts.slice(1).join(' ') || '';
+  const phone = String(user.phone || '').replace(/\D/g, '');
+
+  if (first && last) {
+    const byName = await db.prepare(
+      'SELECT id FROM members WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?) ORDER BY created_at DESC LIMIT 1'
+    ).get(first, last);
+    if (byName) return Number(byName.id);
+  }
+
+  if (first) {
+    const byFirst = await db.prepare(
+      'SELECT id FROM members WHERE LOWER(first_name) = LOWER(?) ORDER BY created_at DESC LIMIT 1'
+    ).get(first);
+    if (byFirst) return Number(byFirst.id);
+  }
+
+  if (phone) {
+    const byPhone = await db.prepare(
+      'SELECT id FROM members WHERE phone LIKE ? ORDER BY created_at DESC LIMIT 1'
+    ).get('%' + phone + '%');
+    if (byPhone) return Number(byPhone.id);
+  }
+
+  return null;
+}
+
 function scopedLgas(user) {
   if (ADMIN_ROLES.has(user.role) || user.scope_type === 'state') return LGAS;
   if (user.scope_type === 'polling_unit') {
@@ -674,8 +711,12 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (task.status !== 'open') return res.status(400).json({ error: 'This task is closed' });
 
-  const memberId = Number(req.body.member_id) || req.user.member_id;
-  if (!memberId) return res.status(400).json({ error: 'No member selected for this submission' });
+  const memberId = await resolveMemberForSubmission(req.user, req.body.member_id);
+  if (!memberId) {
+    return res.status(400).json({
+      error: 'This account is not linked to a member yet. Please contact admin to assign a member profile before submitting a task.',
+    });
+  }
 
   const scope = memberScope(req.user);
   const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
