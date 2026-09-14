@@ -47,7 +47,7 @@ function CandidateDashboard({ data, me }) {
         <Card title="Next actions" note="Keep the network moving">
           <div className="btn-row" style={{ marginBottom: 12 }}>
             <Link className="btn" to="/register">Register a member</Link>
-            <Link className="btn secondary" to="/submissions">Review queue</Link>
+            <Link className="btn secondary" to="/tasks">View tasks</Link>
           </div>
           <Alert type="info">
             {pendingReview ? 'Review pending submissions so approved work can release points.'
@@ -64,6 +64,15 @@ function FieldDashboard({ data, me }) {
   const { totals, coverage, by_level, recent, tasks } = data;
   const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const nextLevel = me.permissions.can_register_levels[0];
+  const areaLabel = me.user.role === 'ambassador' ? 'Wards reached'
+    : me.user.role === 'champion' ? 'Polling units reached' : 'Assigned polling unit';
+  const areaValue = me.user.role === 'ambassador' ? coverage.wards
+    : me.user.role === 'champion' ? coverage.units : (coverage.units || 0);
+  const areaFoot = me.user.role === 'ambassador'
+    ? coverage.units + ' polling units active'
+    : me.user.role === 'champion'
+      ? coverage.wards + ' wards represented'
+      : num(totals.verified) + ' verified registrations';
 
   return (
     <>
@@ -76,8 +85,8 @@ function FieldDashboard({ data, me }) {
           foot={num(totals.verified) + ' verified'} progress={pct(totals.verified, totals.total)} />
         <Stat label="Awaiting review" value={num(totals.pending)}
           foot="Records needing supervisor action" />
-        <Stat label="Areas reached" value={coverage.wards}
-          foot={coverage.units + ' polling units'} />
+        <Stat label={areaLabel} value={areaValue}
+          foot={areaFoot} />
         <Stat label="Tasks open" value={num(tasks.open || 0)}
           foot="Check your assigned work" />
       </div>
@@ -105,8 +114,7 @@ function FieldDashboard({ data, me }) {
 
 function RecentRegistrations({ rows }) {
   return (
-    <Card title="Recent registrations" bodyClass=""
-          actions={<Link className="btn sm secondary" to="/members">See all</Link>}>
+    <Card title="Recent registrations" bodyClass="">
       {rows.length === 0 ? <Empty title="Nothing registered yet" /> : (
         <div className="table-wrap">
           <table>
@@ -157,7 +165,7 @@ export default function Dashboard() {
         </Alert>
       )}
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid grid-5" style={{ marginBottom: 16 }}>
         <Stat
           label="Members registered" value={num(totals.total)} accent
           foot={num(totals.verified) + ' verified · ' + num(totals.pending) + ' awaiting review'}
@@ -174,6 +182,11 @@ export default function Dashboard() {
           foot={num(coverage.units) + ' polling units active'}
           progress={pct(coverage.wards, targets.wards)}
           progressTone={coverage.wards < targets.wards / 2 ? 'warn' : ''}
+        />
+        <Stat
+          label="Polling units reached" value={num(coverage.units)}
+          foot="Active polling units in the programme"
+          progress={pct(coverage.units, targets.polling_units)}
         />
         <Stat
           label="Engagement target" value={pct(totals.verified, targets.engagements) + '%'}
@@ -196,8 +209,7 @@ export default function Dashboard() {
                display={num(levelMap.participant || 0) + ' / 35,100'} />
         </Card>
 
-        <Card title="Verification & integrity"
-              note="Data quality controls applied to every registration">
+        <Card title="Verification">
           <div className="grid grid-2" style={{ gap: 10 }}>
             <Stat label="Verified" value={num(totals.verified)} />
             <Stat label="Awaiting review" value={num(totals.pending)} />
@@ -207,8 +219,7 @@ export default function Dashboard() {
           {data.voter_roll_loaded === 0 && (
             <div style={{ marginTop: 14 }}>
               <Alert type="warn">
-                No INEC register extract is loaded, so PVC/VIN numbers are
-                format-checked but not matched against the voter roll.
+                No INEC register extract is loaded.
                 {me.permissions.is_admin && <> <Link to="/admin/data">Load an extract</Link>.</>}
               </Alert>
             </div>
@@ -221,7 +232,6 @@ export default function Dashboard() {
           title="Coverage by Local Government Area"
           note={by_lga.length + ' LGAs with registered members'}
           bodyClass=""
-          actions={<Link className="btn sm secondary" to="/members">View all members</Link>}
         >
           {by_lga.length === 0 ? <Empty title="No coverage yet" /> : (
             <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>

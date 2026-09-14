@@ -82,7 +82,7 @@ export default function Login({ onSignIn }) {
               <input
                 type="text" value={username} autoFocus autoComplete="username"
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="e.g. sen.oyo-central"
+                placeholder="username here ..."
               />
             </Field>
             <Field label="Password" required>
@@ -104,15 +104,6 @@ export default function Login({ onSignIn }) {
               {busy ? 'Signing in' : 'Sign in'}
             </button>
           </form>
-
-          <div className="demo-creds">
-            <strong>Demonstration accounts</strong>
-            <div style={{ marginTop: 6, lineHeight: 1.9 }}>
-              Administrator <code>admin</code> / <code>oyo10x-admin</code><br />
-              Candidate, Ambassador, Champion and Mobiliser logins are listed in{' '}
-              <code>server/data/credentials.csv</code>.
-            </div>
-          </div>
 
         </div>
       </main>

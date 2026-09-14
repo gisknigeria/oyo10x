@@ -113,4 +113,5 @@ export const ROLE_LABEL = {
   ambassador: 'Ambassador',
   champion: 'Ward Champion',
   mobiliser: 'Mobiliser',
+  participant: 'Participant',
 };

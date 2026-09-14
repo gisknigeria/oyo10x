@@ -14,7 +14,7 @@ import {
 } from './auth.js';
 import {
   LGAS, WARDS, POLLING_UNITS, SENATORIAL, FEDERAL, STATE_CONST, BANKS,
-  TOTAL_WARDS, lgasForScope,
+  TOTAL_WARDS, TOTAL_POLLING_UNITS, lgasForScope,
 } from './data/geo.js';
 import {
   runChecks, normalisePhone, loadVoterRoll, voterRollSize,
@@ -77,6 +77,10 @@ const draftToken = () => crypto.randomBytes(24).toString('base64url');
  */
 function memberScope(user) {
   if (ADMIN_ROLES.has(user.role)) return { sql: '1=1', params: [] };
+
+  if (user.role === 'participant' && user.member_id) {
+    return { sql: 'id = ?', params: [user.member_id] };
+  }
 
   if (user.scope_type === 'state') return { sql: '1=1', params: [] };
 
@@ -186,6 +190,16 @@ app.post('/api/auth/change-password', authenticate, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+app.patch('/api/auth/profile', authenticate, wrap(async (req, res) => {
+  const fullName = String(req.body?.full_name || '').trim();
+  const phone = String(req.body?.phone || '').trim() || null;
+  if (!fullName) return res.status(400).json({ error: 'Full name is required' });
+  await db.prepare('UPDATE users SET full_name = ?, phone = ? WHERE id = ?')
+    .run(fullName, phone, req.user.id);
+  await audit(req.user.id, req.user.username, 'profile_updated', 'user', req.user.id, null, ip(req));
+  res.json({ ok: true, user: { ...req.user, full_name: fullName, phone } });
+}));
+
 /* ----------------------------- reference data ---------------------------- */
 
 app.get('/api/geo', authenticate, (req, res) => {
@@ -267,8 +281,18 @@ app.post('/api/public/registration/:token', wrap(async (req, res) => {
     draft.creator_user_id, payload.lat, payload.lng, payload.accuracy,
     payload.lat != null ? nowISO() : null, result.riskScore >= 50 ? 'flagged' : 'pending',
     JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
+  const id = Number(info.lastInsertRowid);
+  const loginPassword = tempPassword();
+  const loginUsername = 'member.' + id;
+  await db.prepare(
+    'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
+    + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(loginUsername, hashPassword(loginPassword), 1, 'participant',
+    payload.first_name + ' ' + payload.last_name, payload.phone, 'polling_unit',
+    payload.lga + '|' + payload.ward + '|' + payload.polling_unit, id, 'active', nowISO());
   await db.prepare('UPDATE registration_drafts SET completed_at = ? WHERE id = ?').run(nowISO(), draft.id);
-  res.status(201).json({ id: Number(info.lastInsertRowid), status: result.riskScore >= 50 ? 'flagged' : 'pending' });
+  res.status(201).json({ id, status: result.riskScore >= 50 ? 'flagged' : 'pending',
+    login: { username: loginUsername, password: loginPassword } });
 }));
 
 app.post('/api/bank/resolve', authenticate, wrap(async (req, res) => {
@@ -350,13 +374,51 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
     JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
 
   const id = Number(info.lastInsertRowid);
+  const loginPassword = tempPassword();
+  const loginUsername = 'member.' + id;
+  await db.prepare(
+    'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
+    + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(loginUsername, hashPassword(loginPassword), 1, 'participant',
+    payload.first_name + ' ' + payload.last_name, payload.phone, 'polling_unit',
+    payload.lga + '|' + payload.ward + '|' + payload.polling_unit, id, 'active', nowISO());
   audit(req.user.id, req.user.username, 'member_registered', 'member', id,
     { code, level, lga: payload.lga, risk: result.riskScore }, ip(req));
 
   res.status(201).json({
     id, code, status: result.riskScore >= 50 ? 'flagged' : 'pending',
+    login: { username: loginUsername, password: loginPassword },
     risk_score: result.riskScore, flags: result.flags, checks: result.checks,
   });
+}));
+
+app.post('/api/members/:id/login', authenticate, wrap(async (req, res) => {
+  const scope = memberScope(req.user);
+  const member = await db.prepare(
+    'SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')'
+  ).get(req.params.id, ...scope.params);
+  if (!member) return res.status(404).json({ error: 'Member not found in your permitted area' });
+
+  const existing = await db.prepare('SELECT username FROM users WHERE member_id = ?').get(member.id);
+  if (existing) return res.status(409).json({ error: 'This member already has a login', username: existing.username });
+
+  const password = tempPassword();
+  const username = 'member.' + member.id;
+  const role = member.level;
+  const scopeType = role === 'ambassador' ? 'lga'
+    : role === 'champion' ? 'ward' : 'polling_unit';
+  const scopeValue = role === 'ambassador' ? member.lga
+    : role === 'champion' ? member.ward
+    : member.lga + '|' + member.ward + '|' + member.polling_unit;
+
+  await db.prepare(
+    'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
+    + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(username, hashPassword(password), 1, role, member.first_name + ' ' + member.last_name,
+    member.phone, scopeType, scopeValue, member.id, 'active', nowISO());
+  audit(req.user.id, req.user.username, 'member_login_created', 'member', member.id,
+    { username, role }, ip(req));
+  res.status(201).json({ username, password, role });
 }));
 
 app.get('/api/members', authenticate, wrap(async (req, res) => {
@@ -724,7 +786,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     by_level: byLevel,
     by_lga: byLga,
     coverage,
-    targets: { lgas: LGAS.length, wards: TOTAL_WARDS, engagements: 35100, mobilisers: 3510 },
+    targets: { lgas: LGAS.length, wards: TOTAL_WARDS, polling_units: TOTAL_POLLING_UNITS, engagements: 35100, mobilisers: 3510 },
     recent,
     tasks,
     submissions: subs,

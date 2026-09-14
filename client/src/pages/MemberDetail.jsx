@@ -24,6 +24,7 @@ export default function MemberDetail() {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [login, setLogin] = useState(null);
 
   const load = () => api.get('/members/' + id).then(setData).catch((e) => setError(e.message));
   useEffect(() => { setData(null); load(); }, [id]);
@@ -45,6 +46,13 @@ export default function MemberDetail() {
     finally { setBusy(false); }
   };
 
+  const createLogin = async () => {
+    setBusy(true); setError('');
+    try { setLogin(await api.post('/members/' + id + '/login')); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
   if (error) return <Alert type="error">{error}</Alert>;
   if (!data) return <Loading label="Loading member" />;
 
@@ -58,6 +66,9 @@ export default function MemberDetail() {
       <div className="toolbar">
         <button className="btn sm secondary" onClick={() => navigate(-1)}>← Back</button>
         <div className="spacer" />
+        <button className="btn sm secondary" onClick={createLogin} disabled={busy}>
+          Create login
+        </button>
         {me.permissions.is_admin && (
           <button className="btn sm secondary" onClick={recheck} disabled={busy}>
             Re-run checks
@@ -72,6 +83,13 @@ export default function MemberDetail() {
             note={m.code + ' · ' + (LEVEL_LABEL[m.level] || m.level)}
             actions={<Status value={m.status} />}
           >
+            {login && (
+              <Alert type="success" title="Login created. ">
+                Username: <code>{login.username}</code><br />
+                Temporary password: <code>{login.password}</code><br />
+                Share these details securely. The member must change the password after signing in.
+              </Alert>
+            )}
             <dl className="kv">
               <dt>Phone</dt><dd className="mono">{m.phone}</dd>
               <dt>Designation</dt><dd>{m.designation || '--'}</dd>

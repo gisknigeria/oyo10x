@@ -80,6 +80,8 @@ export const POLLING_UNITS = Object.fromEntries(LGAS.map((lga) => [lga, sourceFo
 export const WARDS = Object.fromEntries(LGAS.map((lga) => [lga, Object.keys(POLLING_UNITS[lga])]));
 
 export const TOTAL_WARDS = Object.values(WARDS).reduce((a, w) => a + w.length, 0);
+export const TOTAL_POLLING_UNITS = Object.values(POLLING_UNITS)
+  .flatMap((wards) => Object.values(wards).flat()).length;
 
 export const BANKS = [
   'Access Bank', 'Citibank Nigeria', 'Ecobank Nigeria', 'Fidelity Bank',

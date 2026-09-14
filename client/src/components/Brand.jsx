@@ -25,7 +25,8 @@ export function Crest({ size = 44, withText = false }) {
     return (
       <img
         src="/brand/logo.png" alt="OYO 10X" height={size}
-        style={{ height: size, width: 'auto', display: 'block' }}
+        className="brand-logo-circle"
+        style={{ height: size, width: size, display: 'block' }}
         onError={() => setUseFile(false)}
       />
     );

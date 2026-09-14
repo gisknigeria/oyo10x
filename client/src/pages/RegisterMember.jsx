@@ -143,6 +143,14 @@ export default function RegisterMember() {
                 The polling unit and ward are kept so you can add the next person
                 quickly. <Link to={'/members/' + result.id}>View this record</Link>.
               </div>
+              {result.login && (
+                <div className="login-credentials">
+                  <strong>Member login</strong><br />
+                  Username: <code>{result.login.username}</code><br />
+                  Temporary password: <code>{result.login.password}</code><br />
+                  <span className="muted">The member must change this password after signing in.</span>
+                </div>
+              )}
             </div>
           </Alert>
         )}

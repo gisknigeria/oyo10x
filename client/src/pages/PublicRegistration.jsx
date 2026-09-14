@@ -16,7 +16,11 @@ export default function PublicRegistration({ token }) {
   }, [token]);
   const submit = async (e) => {
     e.preventDefault(); setError('');
-    try { await publicRequest('/api/public/registration/' + token, { method: 'POST', body: form }); setMessage('Registration submitted successfully.'); }
+    try {
+      const result = await publicRequest('/api/public/registration/' + token, { method: 'POST', body: form });
+      setMessage('Registration submitted successfully. Login: ' + result.login.username
+        + ' | Temporary password: ' + result.login.password);
+    }
     catch (e2) { setError(e2.data?.flags?.map((f) => f.message).join(', ') || e2.message); }
   };
   if (error) return <div className="login-main"><Alert type="error">{error}</Alert></div>;
