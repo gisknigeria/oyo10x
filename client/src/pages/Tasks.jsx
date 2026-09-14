@@ -21,6 +21,110 @@ const BLANK_TASK = {
   target_scope_type: 'state', target_scope_value: '', questions: [],
 };
 
+function TaskSubmissionForm({ task, onClose, onSubmitted }) {
+  const { me } = useAuth();
+  const [answers, setAnswers] = useState(() => Object.fromEntries((task.questions || []).map((q) => [q.id, ''])));
+  const [note, setNote] = useState('');
+  const [photo, setPhoto] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [location, setLocation] = useState({ lat: null, lng: null, accuracy: null });
+
+  useEffect(() => {
+    if (!task.requires_location || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setLocation({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      }),
+      () => setError('Location access was blocked. Please allow location access or the task cannot be submitted.')
+    );
+  }, [task]);
+
+  const setAnswer = (qid, value) => {
+    setAnswers((s) => ({ ...s, [qid]: value }));
+  };
+
+  const submit = async () => {
+    setBusy(true); setError('');
+    try {
+      const form = new FormData();
+      form.append('member_id', String(me.user.member_id || ''));
+      form.append('answers', JSON.stringify(answers));
+      if (note) form.append('note', note);
+      if (photo) form.append('photo', photo);
+      if (location.lat != null && location.lng != null) {
+        form.append('lat', String(location.lat));
+        form.append('lng', String(location.lng));
+        if (location.accuracy != null) form.append('accuracy', String(location.accuracy));
+      }
+      await api.form('/tasks/' + task.id + '/submit', form);
+      onSubmitted();
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={task.title} onClose={onClose} footer={
+      <div className="btn-row">
+        <button className="btn" onClick={submit} disabled={busy}>
+          {busy && <span className="spinner" />} Submit task
+        </button>
+        <button className="btn secondary" onClick={onClose}>Cancel</button>
+      </div>
+    }>
+      {error && <Alert type="error">{error}</Alert>}
+
+      <div className="card" style={{ padding: 12, marginBottom: 14 }}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>{task.type.replace(/_/g, ' ')}</div>
+        <div style={{ fontWeight: 600 }}>{task.description || 'Complete the required task evidence below.'}</div>
+      </div>
+
+      {(task.questions || []).map((q, index) => (
+        <Field key={q.id || index} label={q.label || 'Question ' + (index + 1)} required>
+          {q.type === 'select' ? (
+            <select value={answers[q.id] || ''} onChange={(e) => setAnswer(q.id, e.target.value)}>
+              <option value="">Select an answer</option>
+              {(q.options || []).map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          ) : (
+            <textarea
+              value={answers[q.id] || ''}
+              onChange={(e) => setAnswer(q.id, e.target.value)}
+              placeholder="Type your answer here..."
+            />
+          )}
+        </Field>
+      ))}
+
+      {task.requires_photo && (
+        <Field label="Photo evidence" required>
+          <input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} />
+        </Field>
+      )}
+
+      {task.requires_location && (
+        <div className="card" style={{ padding: 10, marginBottom: 12 }}>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {location.lat != null && location.lng != null
+              ? `Location captured: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
+              : 'Capturing your current location...'}
+          </div>
+        </div>
+      )}
+
+      <Field label="Notes">
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note for the reviewer" />
+      </Field>
+    </Modal>
+  );
+}
+
 function TaskForm({ geo, onSave, onClose }) {
   const [t, setT] = useState(BLANK_TASK);
   const [busy, setBusy] = useState(false);
@@ -163,6 +267,7 @@ export default function Tasks() {
   const [geo, setGeo] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
 
   const load = () => api.get('/tasks').then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); api.get('/geo').then(setGeo).catch(() => {}); }, []);
@@ -187,6 +292,10 @@ export default function Tasks() {
       {creating && (
         <TaskForm geo={geo} onClose={() => setCreating(false)}
                   onSave={() => { setCreating(false); load(); }} />
+      )}
+      {selectedTask && (
+        <TaskSubmissionForm task={selectedTask} onClose={() => setSelectedTask(null)}
+                           onSubmitted={() => { setSelectedTask(null); load(); }} />
       )}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
@@ -257,9 +366,16 @@ export default function Tasks() {
                     <td className="num">{num(t.submissions)}</td>
                     <td className="num">{num(t.approved)}</td>
                     <td><Status value={t.status} /></td>
+                    {!me.permissions.is_admin && (
+                      <td className="task-action-cell">
+                        <button className="btn sm secondary task-action-btn" onClick={() => setSelectedTask(t)}>
+                          Open task
+                        </button>
+                      </td>
+                    )}
                     {me.permissions.is_admin && (
-                      <td>
-                        <button className="btn sm secondary" onClick={() => toggle(t)}>
+                      <td className="task-action-cell">
+                        <button className="btn sm secondary task-action-btn" onClick={() => toggle(t)}>
                           {t.status === 'open' ? 'Close' : 'Reopen'}
                         </button>
                       </td>

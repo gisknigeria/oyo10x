@@ -200,6 +200,29 @@ a:hover { text-decoration: underline; }
   .sidebar { display: none; }
   .app { display: block; }
   .main { min-height: 100vh; }
+  .task-action-cell { text-align: left; }
+  .task-action-btn {
+    width: 100%;
+    min-width: 100%;
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+  .modal {
+    max-width: 100%;
+    border-radius: 14px;
+  }
+  .modal .card-body {
+    padding: 14px;
+  }
+  .field textarea,
+  .field input,
+  .field select {
+    min-height: 44px;
+    font-size: 15px;
+  }
+  .field textarea {
+    min-height: 90px;
+  }
   .topbar {
     padding: 10px 14px;
     position: sticky;
@@ -372,6 +395,11 @@ textarea { min-height: 70px; resize: vertical; }
 .btn.danger:hover:not(:disabled) { background: #991b1b; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.task-action-cell { text-align: right; }
+.task-action-btn {
+  min-width: 120px;
+  padding: 9px 12px;
+}
 
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
 .toolbar input, .toolbar select { width: auto; min-width: 150px; }
@@ -403,10 +431,8 @@ textarea { min-height: 70px; resize: vertical; }
 
 .login-page {
   min-height: 100vh; display: grid; grid-template-columns: 1.15fr 1fr;
-  background: var(--cream-2);
+  background: linear-gradient(180deg, #f6f4ee 0%, #f0f5f2 100%);
 }
-@media (max-width: 980px) { .login-page { grid-template-columns: 1fr; }
-  .login-aside { display: none; } }
 
 /* Cover-style hero: deep green ground, gold frame, portrait bleeding in. */
 .login-aside {
@@ -469,11 +495,18 @@ textarea { min-height: 70px; resize: vertical; }
   margin-left: auto; }
 
 .login-main { display: grid; place-items: center; padding: 32px; }
-.login-box { width: 100%; max-width: 386px; }
-.login-box h2 { font-family: var(--serif); font-size: 25px; margin-bottom: 3px;
-  color: var(--green-900); }
-.login-box .sub { color: var(--ink-500); font-size: 13.5px; margin-bottom: 20px; }
-.login-box .btn { width: 100%; padding: 12px; }
+.login-box {
+  width: 100%; max-width: 420px;
+  background: rgba(255,255,255,0.9);
+  border: 1px solid rgba(16, 34, 20, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 12px 30px rgba(9, 33, 22, 0.08);
+  padding: 24px 22px 20px;
+}
+.login-box h2 { font-family: var(--font); font-size: 28px; margin-bottom: 4px;
+  color: var(--green-900); letter-spacing: -0.03em; }
+.login-box .sub { color: var(--ink-500); font-size: 13.5px; margin-bottom: 20px; line-height: 1.6; }
+.login-box .btn { width: 100%; padding: 12px 14px; }
 .password-field { position: relative; }
 .password-field input { padding-right: 62px; }
 .password-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
@@ -481,7 +514,25 @@ textarea { min-height: 70px; resize: vertical; }
   font-size: 12px; font-weight: 700; padding: 5px 4px; }
 .password-toggle:hover { color: var(--gold-700); }
 .login-mobile-brand { display: none; align-items: center; gap: 11px; margin-bottom: 22px; }
-@media (max-width: 980px) { .login-mobile-brand { display: flex; } }
+@media (max-width: 980px) {
+  .login-page { grid-template-columns: 1fr; }
+  .login-aside { display: none; }
+  .login-main {
+    padding: 16px;
+    display: block;
+  }
+  .login-box {
+    max-width: 100%;
+    padding: 18px 16px 16px;
+    border-radius: 18px;
+    box-shadow: 0 8px 18px rgba(9, 33, 22, 0.06);
+  }
+  .login-mobile-brand { display: flex; }
+  .login-box h2 { font-size: 24px; }
+  .login-box .sub { font-size: 12.8px; margin-bottom: 16px; }
+  .login-box .field { margin-bottom: 12px; }
+  .login-box .btn { padding: 11px 14px; }
+}
 
 .demo-creds { margin-top: 20px; padding: 12px 14px; background: var(--gold-50);
   border: 1px solid var(--gold-100);
