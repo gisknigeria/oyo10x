@@ -10,6 +10,7 @@ const SCOPES = [
   { v: 'state_const', label: 'State constituency' },
   { v: 'lga', label: 'Single LGA' },
   { v: 'ward', label: 'Single ward' },
+  { v: 'polling_unit', label: 'Single polling unit' },
 ];
 const OFFICES = ['Governor', 'Deputy Governor', 'Senator',
   'House of Representatives', 'House of Assembly'];
@@ -22,10 +23,30 @@ function NewUser({ geo, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null);
+  const [pollingLocation, setPollingLocation] = useState({ lga: '', ward: '' });
 
   const set = (k) => (e) => {
     const v = e.target.value;
-    setU((s) => ({ ...s, [k]: v, ...(k === 'scope_type' ? { scope_value: '' } : {}) }));
+    setU((s) => ({
+      ...s,
+      [k]: v,
+      ...(k === 'scope_type' ? { scope_value: '' } : {}),
+      ...(k === 'role' && v !== 'candidate' ? { office: '' } : {}),
+      ...(k === 'role' && v === 'mobiliser'
+        ? { scope_type: 'polling_unit', scope_value: '' } : {}),
+    }));
+  };
+
+  const pollingWards = geo?.polling_units?.[pollingLocation.lga] || {};
+  const pollingUnits = pollingWards[pollingLocation.ward] || [];
+  const setPollingLocationField = (key) => (e) => {
+    const next = { ...pollingLocation, [key]: e.target.value };
+    if (key === 'lga') next.ward = '';
+    setPollingLocation(next);
+    setU((s) => ({ ...s, scope_value: '' }));
+  };
+  const setPollingUnit = (e) => {
+    setU((s) => ({ ...s, scope_value: [pollingLocation.lga, pollingLocation.ward, e.target.value].join('|') }));
   };
 
   const options = !geo ? [] :
@@ -111,7 +132,30 @@ function NewUser({ geo, onClose, onSaved }) {
             {SCOPES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
           </select>
         </Field>
-        {u.scope_type !== 'state' && (
+        {u.scope_type === 'polling_unit' ? (
+          <>
+            <Field label="LGA" required>
+              <select value={pollingLocation.lga} onChange={setPollingLocationField('lga')}>
+                <option value="">Select an LGA</option>
+                {(geo?.lgas || []).map((l) => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </Field>
+            <Field label="Ward" required>
+              <select value={pollingLocation.ward} onChange={setPollingLocationField('ward')}
+                      disabled={!pollingLocation.lga}>
+                <option value="">Select a ward</option>
+                {Object.keys(pollingWards).map((w) => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </Field>
+            <Field label="Polling unit" required>
+              <select value={u.scope_value.split('|')[2] || ''} onChange={setPollingUnit}
+                      disabled={!pollingLocation.ward}>
+                <option value="">Select a polling unit</option>
+                {pollingUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+              </select>
+            </Field>
+          </>
+        ) : u.scope_type !== 'state' && (
           <Field label="Which one" required>
             <select value={u.scope_value} onChange={set('scope_value')}>
               <option value="">Select</option>
@@ -213,7 +257,7 @@ export default function Users() {
                     <td>{u.full_name}</td>
                     <td>
                       <span className="badge">{ROLE_LABEL[u.role] || u.role}</span>
-                      {u.office && (
+                      {u.role === 'candidate' && u.office && (
                         <div className="muted" style={{ fontSize: 12 }}>{u.office}</div>
                       )}
                     </td>

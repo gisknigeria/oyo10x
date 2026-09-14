@@ -200,6 +200,10 @@ for (const [table, column, type] of [
   } catch { /* column already present */ }
 }
 
+// Office is meaningful only for candidate accounts. Clean up older accounts
+// created before the role-specific office field was enforced.
+await db.prepare("UPDATE users SET office = NULL WHERE role <> 'candidate'").run();
+
 export const nowISO = () => new Date().toISOString();
 export const period = (d = new Date()) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;

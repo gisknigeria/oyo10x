@@ -86,6 +86,14 @@ function memberScope(user) {
 
   if (user.scope_type === 'lga') return { sql: 'lga = ?', params: [user.scope_value] };
   if (user.scope_type === 'ward') return { sql: 'ward = ?', params: [user.scope_value] };
+  if (user.scope_type === 'polling_unit') {
+    const [lga, ward, pollingUnit] = String(user.scope_value || '').split('|');
+    if (!lga || !ward || !pollingUnit) return { sql: '1=0', params: [] };
+    return {
+      sql: 'lga = ? AND ward = ? AND polling_unit = ?',
+      params: [lga, ward, pollingUnit],
+    };
+  }
 
   // Field agent: own registrations plus their own downline branch.
   return {
@@ -106,6 +114,9 @@ function canRegisterLevels(user) {
 
 function scopedLgas(user) {
   if (ADMIN_ROLES.has(user.role) || user.scope_type === 'state') return LGAS;
+  if (user.scope_type === 'polling_unit') {
+    return [String(user.scope_value || '').split('|')[0]].filter(Boolean);
+  }
   return lgasForScope(user.scope_type, user.scope_value);
 }
 
@@ -679,7 +690,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
     'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
     + 'scope_type,scope_value,referral_code,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
   ).run(String(b.username).trim().toLowerCase(), hashPassword(pw), 1, b.role,
-    b.office || null, b.full_name, b.phone || null,
+    b.role === 'candidate' ? (b.office || null) : null, b.full_name, b.phone || null,
     b.scope_type || 'state', b.scope_value || null, referralCode('U'), 'active', nowISO());
 
   audit(req.user.id, req.user.username, 'user_created', 'user', Number(info.lastInsertRowid),
