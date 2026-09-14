@@ -11,7 +11,6 @@ const SCOPES = [
   { v: 'lga', label: 'Single LGA' },
   { v: 'ward', label: 'Single ward' },
   { v: 'polling_unit', label: 'Single polling unit' },
-  { v: 'polling_unit', label: 'Single polling unit' },
 ];
 const OFFICES = ['Governor', 'Deputy Governor', 'Senator',
   'House of Representatives', 'House of Assembly'];
@@ -171,7 +170,11 @@ function NewUser({ geo, onClose, onSaved }) {
 
 function EditUser({ user, geo, onClose, onSaved }) {
   const [u, setU] = useState({ ...user });
-  const [location, setLocation] = useState({ lga: '', ward: '' });
+  const savedLocation = String(user.scope_value || '').split('|');
+  const [location, setLocation] = useState({
+    lga: user.scope_type === 'polling_unit' ? (savedLocation[0] || '') : '',
+    ward: user.scope_type === 'polling_unit' ? (savedLocation[1] || '') : '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (key) => (e) => setU((s) => ({ ...s, [key]: e.target.value }));
@@ -194,14 +197,22 @@ function EditUser({ user, geo, onClose, onSaved }) {
         <Field label="Phone"><input value={u.phone || ''} onChange={set('phone')} /></Field>
       </div>
       <div className="grid grid-2">
-        <Field label="Role"><select value={u.role} onChange={set('role')}>
+        <Field label="Role"><select value={u.role} onChange={(e) => setU((s) => ({
+          ...s, role: e.target.value,
+          ...(e.target.value === 'mobiliser' ? { scope_type: 'polling_unit', scope_value: '' } : {}),
+          ...(e.target.value !== 'candidate' ? { office: null } : {}),
+        }))}>
           {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
         </select></Field>
         {u.role === 'candidate' && <Field label="Office"><select value={u.office || ''} onChange={set('office')}>
           {OFFICES.map((o) => <option key={o} value={o}>{o}</option>)}
         </select></Field>}
       </div>
-      <Field label="Scope"><select value={u.scope_type} onChange={(e) => setU((s) => ({ ...s, scope_type: e.target.value, scope_value: '' }))}>
+      <Field label="Scope"><select value={u.scope_type} onChange={(e) => {
+        const scopeType = e.target.value;
+        setU((s) => ({ ...s, scope_type: scopeType, scope_value: '' }));
+        setLocation({ lga: '', ward: '' });
+      }}>
         {SCOPES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
       </select></Field>
       {u.scope_type === 'polling_unit' ? <>
