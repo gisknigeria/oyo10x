@@ -26,7 +26,7 @@ const NAV = [
   { to: '/network', label: 'My 10X network', icon: '⑃' },
   { to: '/profile', label: 'My profile', icon: '●' },
   { group: 'Field work' },
-  { to: '/register', label: 'Register member', icon: '＋', needs: 'register' },
+  { to: '/register', label: 'Register network', icon: '＋', needs: 'register' },
   { to: '/tasks', label: 'Tasks', icon: '✓' },
   { group: 'Performance' },
   { to: '/payroll', label: 'Points & payment', icon: '₦' },
@@ -114,7 +114,7 @@ function Shell({ children }) {
         </header>
 
         <div className={`mobile-backdrop ${mobileNavOpen ? 'visible' : ''}`} onClick={() => setMobileNavOpen(false)} />
-        <nav className={`mobile-nav-panel ${mobileNavOpen ? 'open' : ''}`}>
+        <nav className={`mobile-nav-panel nav ${mobileNavOpen ? 'open' : ''}`}>
           <div className="mobile-nav-head">
             <div>
               <div className="brand-mark">OYO<em>10X</em></div>

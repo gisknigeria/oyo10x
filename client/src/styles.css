@@ -313,7 +313,7 @@ a:hover { text-decoration: underline; }
     letter-spacing: .14em;
     color: var(--gold-300);
   }
-  .mobile-nav-panel .nav {
+  .mobile-nav-panel.nav {
     padding: 8px 4px 0;
   }
   .mobile-nav-panel .nav-group {
@@ -325,7 +325,7 @@ a:hover { text-decoration: underline; }
     font-weight: 800;
     opacity: 1;
   }
-  .mobile-nav-panel .nav a {
+  .mobile-nav-panel a {
     padding: 12px 12px;
     font-size: 15px;
     border-radius: 12px;
@@ -335,12 +335,12 @@ a:hover { text-decoration: underline; }
     border: 1px solid transparent;
     letter-spacing: 0.01em;
   }
-  .mobile-nav-panel .nav a.active {
+  .mobile-nav-panel a.active {
     background: linear-gradient(90deg, rgba(27,125,72,0.9), rgba(20,98,56,0.9));
     border-color: rgba(240,217,138,0.38);
     box-shadow: inset 0 0 0 1px rgba(240,217,138,0.10), 0 8px 18px rgba(0,0,0,0.10);
   }
-  .mobile-nav-panel .nav a:hover {
+  .mobile-nav-panel a:hover {
     background: rgba(255,255,255,0.08);
     color: #ffffff;
   }
