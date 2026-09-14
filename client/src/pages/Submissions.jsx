@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, num, timeAgo, assetUrl } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Stat } from '../components/ui.jsx';
 
-export default function Submissions() {
+export default function Submissions({ compact = false }) {
   const [rows, setRows] = useState(null);
   const [status, setStatus] = useState('pending');
   const [error, setError] = useState('');
@@ -25,25 +25,27 @@ export default function Submissions() {
     finally { setBusy(null); }
   };
 
-  return (
+  const content = (
     <>
       {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
 
-      <div className="toolbar">
-        <div className="pill-row">
-          {['pending', 'approved', 'rejected', ''].map((s) => (
-            <button key={s} className={'pill' + (status === s ? ' active' : '')}
-                    onClick={() => setStatus(s)}>
-              {s || 'All'}
-            </button>
-          ))}
+      {!compact && (
+        <div className="toolbar">
+          <div className="pill-row">
+            {['pending', 'approved', 'rejected', ''].map((s) => (
+              <button key={s} className={'pill' + (status === s ? ' active' : '')}
+                      onClick={() => setStatus(s)}>
+                {s || 'All'}
+              </button>
+            ))}
+          </div>
+          <div className="spacer" />
+          {rows && <span className="muted">{num(rows.length)} submission(s)</span>}
         </div>
-        <div className="spacer" />
-        {rows && <span className="muted">{num(rows.length)} submission(s)</span>}
-      </div>
+      )}
 
-      <Card title="Review queue"
-            note="Approving a submission releases its points into the member's monthly total"
+      <Card title={compact ? undefined : 'Review queue'}
+            note={compact ? undefined : "Approving a submission releases its points into the member's monthly total"}
             bodyClass="">
         {!rows ? <Loading /> : rows.length === 0 ? (
           <Empty title={'No ' + (status || '') + ' submissions'} icon="✓">
@@ -118,4 +120,6 @@ export default function Submissions() {
       </Card>
     </>
   );
+
+  return compact ? content : content;
 }

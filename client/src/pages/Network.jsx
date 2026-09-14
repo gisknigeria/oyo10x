@@ -13,11 +13,7 @@ function Node({ node, baseline, depth }) {
         <span className={'tree-toggle' + (hasKids ? '' : ' empty')}>
           {open ? '−' : '+'}
         </span>
-        <span className="tree-name">
-          <Link to={'/members/' + node.id} onClick={(e) => e.stopPropagation()}>
-            {node.name}
-          </Link>
-        </span>
+        <span className="tree-name">{node.name}</span>
         <span className="badge">{LEVEL_LABEL[node.level] || node.level}</span>
         <Status value={node.status} />
         <span className="tree-meta">{node.ward} · {node.polling_unit}</span>

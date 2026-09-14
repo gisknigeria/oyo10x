@@ -141,7 +141,7 @@ export default function RegisterMember() {
               )}
               <div style={{ marginTop: 6 }}>
                 The polling unit and ward are kept so you can add the next person
-                quickly. <Link to={'/members/' + result.id}>View this record</Link>.
+                quickly.
               </div>
               {result.login && (
                 <div className="login-credentials">

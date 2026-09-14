@@ -196,7 +196,6 @@ export default function App() {
           <Route path="/network" element={<Network />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/register" element={<RegisterMember />} />
-          <Route path="/members/:id" element={<MemberDetail />} />
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/payroll" element={<Payroll />} />
           {isAdmin && <Route path="/users" element={<Users />} />}

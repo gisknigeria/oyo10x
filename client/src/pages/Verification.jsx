@@ -29,7 +29,7 @@ function riskTone(score) {
   return score >= 50 ? 'red' : score >= 20 ? 'amber' : 'green';
 }
 
-export default function Verification() {
+export default function Verification({ compact = false }) {
   const { me } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -60,6 +60,47 @@ export default function Verification() {
   const shown = flagFilter
     ? rows.filter((r) => r.flags.some((f) => f.code === flagFilter))
     : rows;
+
+  if (compact) {
+    const preview = shown.slice(0, 6);
+    return (
+      <>
+        {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
+        {data.simulated && (
+          <Alert type="warn" title="Simulation mode is on. ">
+            NIN and bank-name checks are simulated for demo use.
+          </Alert>
+        )}
+        <div className="grid grid-2" style={{ gap: 10, marginBottom: 12 }}>
+          <Stat label="Verified" value={num(spread.clean)} />
+          <Stat label="Flagged" value={num(spread.high)} />
+        </div>
+        {preview.length === 0 ? (
+          <Empty title="No people flagged" icon="✓">
+            The people you added are passing verification checks.
+          </Empty>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Name</th><th>Level</th><th>Issue</th><th>Risk</th></tr>
+              </thead>
+              <tbody>
+                {preview.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.first_name} {r.last_name}</td>
+                    <td><span className="badge">{LEVEL_LABEL[r.level] || r.level}</span></td>
+                    <td>{r.flags[0] ? (FLAG_LABEL[r.flags[0].code] || r.flags[0].code) : 'Review required'}</td>
+                    <td><span className={'badge ' + riskTone(r.risk_score)}>{r.risk_score}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <>

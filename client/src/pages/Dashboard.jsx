@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, num, pct, timeAgo, LEVEL_LABEL } from '../lib/api.js';
 import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
+import Verification from './Verification.jsx';
 
 const FIELD_ROLES = new Set(['ambassador', 'champion', 'mobiliser']);
 
@@ -122,7 +123,7 @@ function RecentRegistrations({ rows }) {
             <tbody>{rows.map((m) => (
               <tr key={m.id}>
                 <td className="mono">{m.code}</td>
-                <td style={{ fontWeight: 600 }}><Link to={'/members/' + m.id}>{m.first_name} {m.last_name}</Link></td>
+                <td style={{ fontWeight: 600 }}>{m.first_name} {m.last_name}</td>
                 <td><span className="badge">{LEVEL_LABEL[m.level] || m.level}</span></td>
                 <td>{m.lga}</td>
                 <td><Status value={m.status} /></td>
@@ -210,20 +211,7 @@ export default function Dashboard() {
         </Card>
 
         <Card title="Verification">
-          <div className="grid grid-2" style={{ gap: 10 }}>
-            <Stat label="Verified" value={num(totals.verified)} />
-            <Stat label="Awaiting review" value={num(totals.pending)} />
-            <Stat label="Flagged high-risk" value={num(data.high_risk)} />
-            <Stat label="Rejected" value={num(totals.rejected)} />
-          </div>
-          {data.voter_roll_loaded === 0 && (
-            <div style={{ marginTop: 14 }}>
-              <Alert type="warn">
-                No INEC register extract is loaded.
-                {me.permissions.is_admin && <> <Link to="/admin/data">Load an extract</Link>.</>}
-              </Alert>
-            </div>
-          )}
+          <Verification compact />
         </Card>
       </div>
 
