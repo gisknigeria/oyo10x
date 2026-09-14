@@ -4,6 +4,130 @@ import { api, num, pct, timeAgo, LEVEL_LABEL } from '../lib/api.js';
 import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
+const FIELD_ROLES = new Set(['ambassador', 'champion', 'mobiliser']);
+
+function DashboardHeading({ title, note }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div className="eyebrow">OYO 10X programme</div>
+      <h1>{title}</h1>
+      <div className="card-note">{note}</div>
+    </div>
+  );
+}
+
+function CandidateDashboard({ data, me }) {
+  const { totals, coverage, targets, by_level, recent, tasks, submissions } = data;
+  const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
+  const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
+
+  return (
+    <>
+      <DashboardHeading
+        title="Constituency command centre"
+        note={'Your view covers ' + (me.user.scope_value || 'the full state') + '. Track growth, reviews, and field activity from here.'}
+      />
+      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+        <Stat label="Verified members" value={num(totals.verified)} accent
+          foot={num(totals.pending) + ' awaiting review'} progress={pct(totals.verified, totals.total)} />
+        <Stat label="Wards reached" value={coverage.wards + ' / ' + targets.wards}
+          foot={coverage.units + ' polling units active'} progress={pct(coverage.wards, targets.wards)} />
+        <Stat label="Pending reviews" value={num(pendingReview)}
+          foot="Submissions needing attention" />
+        <Stat label="Open tasks" value={num(tasks.open || 0)}
+          foot={(tasks.total || 0) + ' tasks this period'} />
+      </div>
+      <div className="grid grid-2" style={{ marginBottom: 16 }}>
+        <Card title="Network leadership" note="People currently registered at each level">
+          <Bar label="Ambassadors" value={levels.ambassador || 0} max={33} display={levels.ambassador || 0} />
+          <Bar label="Champions" value={levels.champion || 0} max={351} display={levels.champion || 0} />
+          <Bar label="Mobilisers" value={levels.mobiliser || 0} max={3510} display={num(levels.mobiliser || 0)} />
+          <Bar label="Participants" value={levels.participant || 0} max={35100} display={num(levels.participant || 0)} />
+        </Card>
+        <Card title="Next actions" note="Keep the network moving">
+          <div className="btn-row" style={{ marginBottom: 12 }}>
+            <Link className="btn" to="/register">Register a member</Link>
+            <Link className="btn secondary" to="/submissions">Review queue</Link>
+          </div>
+          <Alert type="info">
+            {pendingReview ? 'Review pending submissions so approved work can release points.'
+              : 'Keep registering leaders and participants across your assigned area.'}
+          </Alert>
+        </Card>
+      </div>
+      <RecentRegistrations rows={recent} />
+    </>
+  );
+}
+
+function FieldDashboard({ data, me }) {
+  const { totals, coverage, by_level, recent, tasks } = data;
+  const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
+  const nextLevel = me.permissions.can_register_levels[0];
+
+  return (
+    <>
+      <DashboardHeading
+        title="Your field dashboard"
+        note={'Focused on ' + (me.user.scope_value || 'your assigned network') + '. Add people, complete tasks, and watch verification status.'}
+      />
+      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+        <Stat label="Your registrations" value={num(totals.total)} accent
+          foot={num(totals.verified) + ' verified'} progress={pct(totals.verified, totals.total)} />
+        <Stat label="Awaiting review" value={num(totals.pending)}
+          foot="Records needing supervisor action" />
+        <Stat label="Areas reached" value={coverage.wards}
+          foot={coverage.units + ' polling units'} />
+        <Stat label="Tasks open" value={num(tasks.open || 0)}
+          foot="Check your assigned work" />
+      </div>
+      <div className="grid grid-2" style={{ marginBottom: 16 }}>
+        <Card title="Your network" note="The levels currently visible in your branch">
+          {Object.entries(levels).map(([level, count]) => (
+            <Bar key={level} label={LEVEL_LABEL[level] || level} value={count} max={Math.max(count, 10)} display={num(count)} />
+          ))}
+          {!Object.keys(levels).length && <Empty title="No registrations yet" />}
+        </Card>
+        <Card title="Today’s work" note="The quickest way to make progress">
+          <div className="btn-row" style={{ marginBottom: 12 }}>
+            {nextLevel && <Link className="btn" to="/register">Add {LEVEL_LABEL[nextLevel] || nextLevel}</Link>}
+            <Link className="btn secondary" to="/tasks">View tasks</Link>
+          </div>
+          <Alert type="info">
+            Verified registrations and approved task submissions count toward your performance.
+          </Alert>
+        </Card>
+      </div>
+      <RecentRegistrations rows={recent} />
+    </>
+  );
+}
+
+function RecentRegistrations({ rows }) {
+  return (
+    <Card title="Recent registrations" bodyClass=""
+          actions={<Link className="btn sm secondary" to="/members">See all</Link>}>
+      {rows.length === 0 ? <Empty title="Nothing registered yet" /> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Code</th><th>Name</th><th>Level</th><th>LGA</th><th>Status</th><th>Added</th></tr></thead>
+            <tbody>{rows.map((m) => (
+              <tr key={m.id}>
+                <td className="mono">{m.code}</td>
+                <td style={{ fontWeight: 600 }}><Link to={'/members/' + m.id}>{m.first_name} {m.last_name}</Link></td>
+                <td><span className="badge">{LEVEL_LABEL[m.level] || m.level}</span></td>
+                <td>{m.lga}</td>
+                <td><Status value={m.status} /></td>
+                <td className="muted nowrap">{timeAgo(m.created_at)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { me } = useAuth();
   const [data, setData] = useState(null);
@@ -20,6 +144,9 @@ export default function Dashboard() {
   const levelMap = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
   const verifyRate = pct(totals.verified, totals.total);
+
+  if (me.user.role === 'candidate') return <CandidateDashboard data={data} me={me} />;
+  if (FIELD_ROLES.has(me.user.role)) return <FieldDashboard data={data} me={me} />;
 
   return (
     <>
