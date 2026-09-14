@@ -178,6 +178,12 @@ function EditUser({ user, geo, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (key) => (e) => setU((s) => ({ ...s, [key]: e.target.value }));
+  useEffect(() => {
+    if (!geo || user.role !== 'mobiliser' || user.scope_type !== 'ward') return;
+    const lga = geo.lgas.find((name) => (geo.wards[name] || []).includes(user.scope_value));
+    setLocation({ lga: lga || '', ward: user.scope_value || '' });
+    setU((s) => ({ ...s, scope_type: 'polling_unit', scope_value: '' }));
+  }, [geo, user.role, user.scope_type, user.scope_value]);
   const pollingWards = geo?.polling_units?.[location.lga] || {};
   const pollingUnits = pollingWards[location.ward] || [];
   const save = async () => {
@@ -328,7 +334,13 @@ export default function Users() {
                       )}
                     </td>
                     <td className="muted">
-                      {u.scope_value || 'All 33 LGAs'}
+                      {u.scope_type === 'polling_unit' ? (
+                        <>{String(u.scope_value || '').split('|').map((part, i) => (
+                          <div key={i}>{part || 'Not assigned'}</div>
+                        ))}</>
+                      ) : u.role === 'mobiliser' && u.scope_type === 'ward' ? (
+                        <><div>{u.scope_value || 'Ward'}</div><div className="badge amber">Polling unit not assigned</div></>
+                      ) : (u.scope_value || 'All 33 LGAs')}
                       <div style={{ fontSize: 11 }}>{u.scope_type.replace(/_/g, ' ')}</div>
                     </td>
                     <td className="num">{num(u.registered)}</td>
