@@ -63,7 +63,8 @@ export function Crest({ size = 44, withText = false }) {
 }
 
 /**
- * Candidate portrait. The supplied PNG is stored at client/public/brand/candidate.png
+ * Candidate portrait. The supplied transparent-style portrait is stored in
+ * the brand folder and used on the login hero.
  * and it appears automatically; until then a labelled placeholder is shown so
  * no layout depends on the file being present.
  */
@@ -77,7 +78,7 @@ export function CandidatePortrait({ className = '' }) {
           <Crest size={52} />
           <div className="portrait-placeholder-text">
             Drop the candidate photograph at
-            <code>client/public/brand/candidate.png</code>
+            <code>client/public/brand/ChatGPT Image Sep 14, 2026, 06_51_58 AM.png</code>
           </div>
         </div>
       </div>
@@ -86,7 +87,7 @@ export function CandidatePortrait({ className = '' }) {
 
   return (
     <img
-      src="/brand/candidate.png" alt={CAMPAIGN.candidate}
+      src="/brand/ChatGPT%20Image%20Sep%2014,%202026,%2006_51_58%20AM.png" alt={CAMPAIGN.candidate}
       className={'portrait ' + className}
       onError={() => setOk(false)}
     />
