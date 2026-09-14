@@ -1,0 +1,23 @@
+# Render blueprint. Free tier: no persistent disk, so the database lives in the
+# container and resets on deploy or after the service sleeps. SEED_ON_BOOT
+# repopulates it automatically, which is fine for a demonstration.
+#
+# For real data, change `plan` to starter and attach a disk at /data.
+services:
+  - type: web
+    name: oyo10x
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: OYO_SECRET
+        generateValue: true
+      - key: SEED_ON_BOOT
+        value: "1"
+      - key: NODE_ENV
+        value: production
+    # Uncomment together with a paid plan to make data survive restarts:
+    # disk:
+    #   name: oyo10x-data
+    #   mountPath: /data
+    #   sizeGB: 1
