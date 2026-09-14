@@ -28,7 +28,7 @@ async function request(path, options = {}) {
         : options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
-  if (res.status === 401) {
+  if (res.status === 401 && getToken()) {
     clearToken();
     if (!location.pathname.startsWith('/login')) location.href = '/login';
     throw new Error('Your session has expired. Please sign in again.');

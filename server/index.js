@@ -3,6 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { db, nowISO, period as currentPeriod, audit } from './db.js';
@@ -996,12 +997,21 @@ async function maybeSeed() {
   if (process.env.SEED_ON_BOOT !== '1') return;
   if ((await db.prepare('SELECT COUNT(*) n FROM users').get()).n > 0) return;
   console.log('SEED_ON_BOOT: empty database detected, seeding...');
-  try {
-    await import('./seed.js');
-    console.log('SEED_ON_BOOT: done.');
-  } catch (e) {
-    console.error('SEED_ON_BOOT failed:', e.message);
-  }
+  await new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'seed.js')], {
+      env: process.env,
+      stdio: 'inherit',
+    });
+    child.on('error', (error) => {
+      console.error('SEED_ON_BOOT failed:', error.message);
+      resolve();
+    });
+    child.on('exit', (code) => {
+      if (code === 0) console.log('SEED_ON_BOOT: done.');
+      else console.error('SEED_ON_BOOT failed with exit code ' + code + '.');
+      resolve();
+    });
+  });
 }
 
 app.listen(PORT, '0.0.0.0', async () => {
