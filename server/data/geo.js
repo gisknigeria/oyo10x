@@ -1,10 +1,9 @@
 // Oyo State geographic + electoral reference data.
 //
-// SOURCE NOTE: LGA names and Federal Constituency groupings are the standard
-// INEC delineations. Senatorial district membership and the generated ward
-// names are marked VERIFY below -- replace with the official INEC ward list
-// when it arrives (see docs/DATA-SOURCES.md). Everything downstream reads from
-// this file only, so correcting it needs no code changes.
+import { OYO_POLLING_DATA } from './oyoPollingData.js';
+
+// LGA and constituency names are kept in the app's display format. Ward and
+// polling-unit names come from the extracted Oyo State polling dataset.
 
 export const LGAS = [
   'Afijio', 'Akinyele', 'Atiba', 'Atisbo', 'Egbeda',
@@ -64,28 +63,21 @@ export const STATE_CONST = (() => {
   return out;
 })();
 
-// VERIFY: placeholder ward names, correct total (351). Counts per LGA are
-// estimates pending the official list.
-const WARD_COUNTS = (() => {
-  const ibadan = ['Ibadan North', 'Ibadan North-East', 'Ibadan North-West',
-                  'Ibadan South-East', 'Ibadan South-West'];
-  const elevens = ['Akinyele', 'Atiba', 'Egbeda', 'Ido', 'Iseyin', 'Kajola',
-                   'Lagelu', 'Ogbomosho North', 'Oluyole', 'Ona Ara', 'Saki West'];
-  const out = {};
-  for (const lga of LGAS) {
-    out[lga] = ibadan.includes(lga) ? 12 : elevens.includes(lga) ? 11 : 10;
-  }
-  return out;
-})();
+const normaliseLga = (value) => String(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
+const sourceLga = Object.fromEntries(Object.keys(OYO_POLLING_DATA.lgas)
+  .map((name) => [normaliseLga(name), name]));
+sourceLga.ORELOPE = sourceLga.OORELOPE;
+sourceLga.OGBOMOSHONORTH = sourceLga.OGBOMOSONORTH;
+sourceLga.OGBOMOSHOSOUTH = sourceLga.OGBOMOSOSOUTH;
 
-export const WARDS = (() => {
-  const out = {};
-  for (const lga of LGAS) {
-    out[lga] = Array.from({ length: WARD_COUNTS[lga] }, (_, i) =>
-      `${lga} Ward ${String(i + 1).padStart(2, '0')}`);
-  }
-  return out;
-})();
+const sourceFor = (lga) => {
+  const key = sourceLga[normaliseLga(lga)];
+  if (!key) throw new Error('Missing Oyo polling data for LGA: ' + lga);
+  return OYO_POLLING_DATA.lgas[key].wards;
+};
+
+export const POLLING_UNITS = Object.fromEntries(LGAS.map((lga) => [lga, sourceFor(lga)]));
+export const WARDS = Object.fromEntries(LGAS.map((lga) => [lga, Object.keys(POLLING_UNITS[lga])]));
 
 export const TOTAL_WARDS = Object.values(WARDS).reduce((a, w) => a + w.length, 0);
 

@@ -346,7 +346,7 @@ function simulateNIN(m) {
     first_name: m.first_name, last_name: m.last_name, phone: m.phone };
 }
 
-async function resolveBankAccount(accountNumber, bankName) {
+export async function resolveBankAccount(accountNumber, bankName) {
   const key = process.env.PAYSTACK_SECRET_KEY;
   if (!key) {
     return { status: 'not_configured',

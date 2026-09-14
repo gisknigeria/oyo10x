@@ -26,6 +26,8 @@ export default function RegisterMember() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(null);
+  const [accountState, setAccountState] = useState('idle');
+  const [accountError, setAccountError] = useState('');
 
   useEffect(() => {
     api.get('/geo').then((g) => {
@@ -38,6 +40,26 @@ export default function RegisterMember() {
     const v = e.target.value;
     setForm((f) => (k === 'lga' ? { ...f, lga: v, ward: '' } : { ...f, [k]: v }));
     setConflict(null);
+    if (k === 'bank_name' || k === 'account_number') {
+      setAccountState('idle');
+      setAccountError('');
+    }
+  };
+
+  const resolveAccount = async () => {
+    setAccountState('loading');
+    setAccountError('');
+    try {
+      const result = await api.post('/bank/resolve', {
+        bank_name: form.bank_name,
+        account_number: form.account_number,
+      });
+      setForm((current) => ({ ...current, account_name: result.account_name }));
+      setAccountState('resolved');
+    } catch (err) {
+      setAccountState('error');
+      setAccountError(err.data?.reason || err.data?.error || err.message);
+    }
   };
 
   const captureGps = () => {
@@ -90,6 +112,7 @@ export default function RegisterMember() {
   }
 
   const wards = geo.wards[form.lga] || [];
+  const pollingUnits = (geo.polling_units?.[form.lga]?.[form.ward]) || [];
   const required = ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit'];
   const ready = required.every((k) => String(form[k] || '').trim());
 
@@ -172,9 +195,11 @@ export default function RegisterMember() {
               </Field>
             </div>
             <Field label="Polling unit" required
-                   hint="Type the polling unit name exactly as it appears on the INEC list">
-              <input type="text" value={form.polling_unit} onChange={set('polling_unit')}
-                     placeholder="e.g. Agodi Gate Open Space, PU 012" />
+                   hint={form.ward ? pollingUnits.length + ' polling units in this ward' : 'Choose a ward first'}>
+              <select value={form.polling_unit} onChange={set('polling_unit')} disabled={!form.ward}>
+                <option value="">Select a polling unit</option>
+                {pollingUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+              </select>
             </Field>
 
             <div className="section-title">Personal details</div>
@@ -223,6 +248,19 @@ export default function RegisterMember() {
               <Field label="Account name"
                      hint="Must match the person's own name">
                 <input type="text" value={form.account_name} onChange={set('account_name')} />
+                <button type="button" className="btn sm secondary"
+                        style={{ marginTop: 7 }}
+                        onClick={resolveAccount}
+                        disabled={accountState === 'loading'
+                          || !form.bank_name || !/^\d{10}$/.test(form.account_number)}>
+                  {accountState === 'loading' ? 'Resolving...' : 'Resolve account name'}
+                </button>
+                {accountState === 'resolved' && (
+                  <div className="hint" style={{ color: 'var(--green-700)' }}>
+                    Name returned by the bank provider.
+                  </div>
+                )}
+                {accountError && <div className="error-text">{accountError}</div>}
               </Field>
             </div>
 

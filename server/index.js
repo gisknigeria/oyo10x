@@ -12,11 +12,12 @@ import {
   requireAdmin, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
 } from './auth.js';
 import {
-  LGAS, WARDS, SENATORIAL, FEDERAL, STATE_CONST, BANKS, TOTAL_WARDS, lgasForScope,
+  LGAS, WARDS, POLLING_UNITS, SENATORIAL, FEDERAL, STATE_CONST, BANKS,
+  TOTAL_WARDS, lgasForScope,
 } from './data/geo.js';
 import {
   runChecks, normalisePhone, loadVoterRoll, voterRollSize,
-  clearVoterRoll, voterRollBatches, isSimulated,
+  clearVoterRoll, voterRollBatches, isSimulated, resolveBankAccount,
 } from './verify.js';
 import {
   LEVEL_CAPS, ACTIVITY_POINTS, NAIRA_PER_POINT, BASELINE_ACTIVATIONS,
@@ -180,6 +181,7 @@ app.get('/api/geo', authenticate, (req, res) => {
     lgas: allowed,
     all_lgas: LGAS,
     wards: Object.fromEntries(allowed.map((l) => [l, WARDS[l]])),
+    polling_units: Object.fromEntries(allowed.map((l) => [l, POLLING_UNITS[l]])),
     senatorial: Object.keys(SENATORIAL),
     federal: Object.keys(FEDERAL),
     state_const: Object.keys(STATE_CONST),
@@ -189,6 +191,19 @@ app.get('/api/geo', authenticate, (req, res) => {
     activity_points: ACTIVITY_POINTS,
   });
 });
+
+app.post('/api/bank/resolve', authenticate, wrap(async (req, res) => {
+  const accountNumber = String(req.body?.account_number || '').replace(/\D/g, '');
+  const bankName = String(req.body?.bank_name || '').trim();
+  if (!/^\d{10}$/.test(accountNumber)) {
+    return res.status(400).json({ error: 'Account number must be exactly 10 digits' });
+  }
+  if (!bankName) return res.status(400).json({ error: 'Select a bank first' });
+  const result = await resolveBankAccount(accountNumber, bankName);
+  if (result.status === 'pass') return res.json(result);
+  const status = result.status === 'not_configured' ? 503 : 422;
+  return res.status(status).json(result);
+}));
 
 /* -------------------------------- members -------------------------------- */
 
