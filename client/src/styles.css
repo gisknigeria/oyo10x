@@ -326,18 +326,25 @@ a:hover { text-decoration: underline; }
     font-size: 15px;
     border-radius: 12px;
     margin-bottom: 4px;
-    color: #edf5ee;
-    font-weight: 500;
-    border: 1px solid transparent;
+    color: #ffffff;
+    font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.06);
+    letter-spacing: 0.01em;
   }
   .mobile-nav-panel .nav a.active {
-    background: linear-gradient(90deg, rgba(27,125,72,0.9), rgba(20,98,56,0.9));
-    border-color: rgba(240,217,138,0.22);
-    box-shadow: inset 0 0 0 1px rgba(240,217,138,0.1), 0 8px 18px rgba(0,0,0,0.10);
+    background: linear-gradient(90deg, rgba(255,255,255,0.18), rgba(255,255,255,0.10));
+    border-color: rgba(240,217,138,0.38);
+    box-shadow: inset 0 0 0 1px rgba(240,217,138,0.12), 0 8px 18px rgba(0,0,0,0.10);
+  }
+  .mobile-nav-panel .nav a:hover {
+    background: rgba(255,255,255,0.08);
+    color: #ffffff;
   }
   .mobile-nav-panel .nav-icon {
     width: 18px;
     font-size: 15px;
+    color: #ffffff;
+    font-weight: 800;
   }
   .mobile-signout {
     margin-top: 18px;
@@ -345,10 +352,10 @@ a:hover { text-decoration: underline; }
     padding: 12px 14px;
     border-radius: 12px;
     font-size: 15px;
-    font-weight: 700;
-    background: rgba(255,255,255,0.12);
+    font-weight: 800;
+    background: rgba(255,255,255,0.16);
     color: #fff;
-    border: 1px solid rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.20);
   }
 }
 
