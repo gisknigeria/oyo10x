@@ -125,8 +125,22 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   );
 }
 
-function TaskForm({ geo, onSave, onClose }) {
-  const [t, setT] = useState(BLANK_TASK);
+function TaskForm({ geo, task = null, onSave, onClose }) {
+  const initialTask = task ? {
+    title: task.title || '',
+    description: task.description || '',
+    type: task.type || 'canvass',
+    points: task.points || 5,
+    mandatory: task.mandatory !== false,
+    requires_photo: !!task.requires_photo,
+    requires_location: task.requires_location !== false,
+    target_level: task.target_level || 'all',
+    target_scope_type: task.target_scope_type || 'state',
+    target_scope_value: task.target_scope_value || '',
+    questions: Array.isArray(task.questions) ? task.questions : [],
+  } : BLANK_TASK;
+
+  const [t, setT] = useState(initialTask);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -150,16 +164,21 @@ function TaskForm({ geo, onSave, onClose }) {
   const save = async () => {
     setBusy(true); setError('');
     try {
-      await api.post('/tasks', { ...t, points: Number(t.points) });
+      const payload = { ...t, points: Number(t.points) };
+      if (task?.id) {
+        await api.patch('/tasks/' + task.id, payload);
+      } else {
+        await api.post('/tasks', payload);
+      }
       onSave();
     } catch (e) { setError(e.message); setBusy(false); }
   };
 
   return (
-    <Modal title="Create a task" onClose={onClose} footer={
+    <Modal title={task ? 'Edit task' : 'Create a task'} onClose={onClose} footer={
       <div className="btn-row">
         <button className="btn" onClick={save} disabled={busy || !t.title.trim()}>
-          {busy && <span className="spinner" />} Create task
+          {busy && <span className="spinner" />} {task ? 'Save changes' : 'Create task'}
         </button>
         <button className="btn secondary" onClick={onClose}>Cancel</button>
       </div>
@@ -189,7 +208,7 @@ function TaskForm({ geo, onSave, onClose }) {
       <div className="grid grid-2">
         <Field label="Who must do this">
           <select value={t.target_level} onChange={set('target_level')}>
-            <option value="all">Everyone</option>
+            <option value="all">All levels (general + ambassador/champion/mobiliser)</option>
             <option value="ambassador">Ambassadors only</option>
             <option value="champion">Champions only</option>
             <option value="mobiliser">Mobilisers only</option>
@@ -267,6 +286,7 @@ export default function Tasks() {
   const [geo, setGeo] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
 
   const load = () => api.get('/tasks').then(setData).catch((e) => setError(e.message));
@@ -292,6 +312,10 @@ export default function Tasks() {
       {creating && (
         <TaskForm geo={geo} onClose={() => setCreating(false)}
                   onSave={() => { setCreating(false); load(); }} />
+      )}
+      {editingTask && (
+        <TaskForm geo={geo} task={editingTask} onClose={() => setEditingTask(null)}
+                  onSave={() => { setEditingTask(null); load(); }} />
       )}
       {selectedTask && (
         <TaskSubmissionForm task={selectedTask} onClose={() => setSelectedTask(null)}
@@ -349,8 +373,7 @@ export default function Tasks() {
                     </td>
                     <td><span className="badge">{t.type.replace(/_/g, ' ')}</span></td>
                     <td>
-                      {t.target_level === 'all' ? 'Everyone'
-                        : (LEVEL_LABEL[t.target_level] || t.target_level) + 's'}
+                      {t.target_level === 'all' ? 'All levels' : (LEVEL_LABEL[t.target_level] || t.target_level) + 's'}
                       {t.target_scope_value && (
                         <div className="muted" style={{ fontSize: 12 }}>{t.target_scope_value}</div>
                       )}
@@ -375,9 +398,14 @@ export default function Tasks() {
                     )}
                     {me.permissions.is_admin && (
                       <td className="task-action-cell">
-                        <button className="btn sm secondary task-action-btn" onClick={() => toggle(t)}>
-                          {t.status === 'open' ? 'Close' : 'Reopen'}
-                        </button>
+                        <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+                          <button className="btn sm secondary task-action-btn" onClick={() => setEditingTask(t)}>
+                            Edit
+                          </button>
+                          <button className="btn sm secondary task-action-btn" onClick={() => toggle(t)}>
+                            {t.status === 'open' ? 'Close' : 'Reopen'}
+                          </button>
+                        </div>
                       </td>
                     )}
                   </tr>

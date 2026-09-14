@@ -588,12 +588,58 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
 }));
 
 app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) => {
-  const { status } = req.body || {};
-  if (!['open', 'closed'].includes(status)) {
-    return res.status(400).json({ error: 'status must be open or closed' });
+  const b = req.body || {};
+  const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  if (Object.prototype.hasOwnProperty.call(b, 'status')) {
+    const { status } = b;
+    if (!['open', 'closed'].includes(status)) {
+      return res.status(400).json({ error: 'status must be open or closed' });
+    }
+    await db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, req.params.id);
+    return res.json({ ok: true, updated: 'status' });
   }
-  await db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, req.params.id);
-  res.json({ ok: true });
+
+  const title = String(b.title ?? task.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'Task title is required' });
+
+  const payload = {
+    title,
+    description: b.description ?? task.description ?? null,
+    type: b.type || task.type || 'canvass',
+    points: Number(b.points ?? task.points ?? 5) || 0,
+    mandatory: b.mandatory === false ? 0 : 1,
+    requires_photo: b.requires_photo ? 1 : 0,
+    requires_location: b.requires_location === false ? 0 : 1,
+    questions: Array.isArray(b.questions)
+      ? b.questions
+      : (task.questions_json ? JSON.parse(task.questions_json || '[]') : []),
+    target_level: b.target_level || task.target_level || 'all',
+    target_scope_type: b.target_scope_type || task.target_scope_type || 'state',
+    target_scope_value: b.target_scope_value ?? task.target_scope_value ?? null,
+    period: b.period || task.period || currentPeriod(),
+    opens_at: b.opens_at ?? task.opens_at ?? null,
+    due_at: b.due_at ?? task.due_at ?? null,
+  };
+
+  const questionsJson = JSON.stringify(payload.questions || []);
+  await db.prepare(
+    'UPDATE tasks SET title = ?, description = ?, type = ?, points = ?, mandatory = ?, '
+    + 'requires_photo = ?, requires_location = ?, questions_json = ?, target_level = ?, '
+    + 'target_scope_type = ?, target_scope_value = ?, period = ?, opens_at = ?, due_at = ? '
+    + 'WHERE id = ?'
+  ).run(
+    payload.title, payload.description, payload.type, payload.points,
+    payload.mandatory, payload.requires_photo, payload.requires_location,
+    questionsJson, payload.target_level, payload.target_scope_type,
+    payload.target_scope_value, payload.period, payload.opens_at, payload.due_at,
+    req.params.id
+  );
+
+  audit(req.user.id, req.user.username, 'task_updated', 'task', Number(req.params.id),
+    { title: payload.title }, ip(req));
+  res.json({ ok: true, updated: 'task' });
 }));
 
 /** Tasks that apply to a given member, with their submission state. */
