@@ -186,6 +186,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip         TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS registration_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
+  creator_user_id INTEGER NOT NULL REFERENCES users(id),
+  data_json TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  completed_at TEXT,
+  created_at TEXT NOT NULL
+);
 `);
 
 // Additive migrations. Safe to run on every boot: an existing column throws,

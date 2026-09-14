@@ -4,6 +4,7 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { db, nowISO, period as currentPeriod, audit } from './db.js';
@@ -66,6 +67,7 @@ const upload = multer({
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const ip = (req) => req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+const draftToken = () => crypto.randomBytes(24).toString('base64url');
 
 /* ------------------------------ scope rules ------------------------------ */
 
@@ -202,6 +204,72 @@ app.get('/api/geo', authenticate, (req, res) => {
     activity_points: ACTIVITY_POINTS,
   });
 });
+
+app.get('/api/public/geo', (_req, res) => res.json({
+  lgas: LGAS, wards: WARDS, polling_units: POLLING_UNITS, banks: BANKS,
+}));
+
+app.get('/api/public/registration/:token', wrap(async (req, res) => {
+  const draft = await db.prepare(
+    'SELECT data_json,expires_at,completed_at FROM registration_drafts WHERE token = ?'
+  ).get(req.params.token);
+  if (!draft || draft.completed_at || new Date(draft.expires_at) < new Date()) {
+    return res.status(404).json({ error: 'This registration link is invalid, expired, or already completed' });
+  }
+  res.json({ ...JSON.parse(draft.data_json), expires_at: draft.expires_at });
+}));
+
+app.post('/api/registration-drafts', authenticate, wrap(async (req, res) => {
+  const b = req.body || {};
+  if (!String(b.first_name || '').trim() || !String(b.last_name || '').trim() || !b.level) {
+    return res.status(400).json({ error: 'First name, last name, and network position are required' });
+  }
+  const token = draftToken();
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await db.prepare(
+    'INSERT INTO registration_drafts (token,creator_user_id,data_json,expires_at,created_at) VALUES (?,?,?,?,?)'
+  ).run(token, req.user.id, JSON.stringify({
+    first_name: String(b.first_name).trim(), last_name: String(b.last_name).trim(),
+    level: b.level, designation: b.designation || '', lga: b.lga || '', ward: b.ward || '',
+  }), expires, nowISO());
+  res.status(201).json({ token, expires_at: expires });
+}));
+
+app.post('/api/public/registration/:token', wrap(async (req, res) => {
+  const draft = await db.prepare(
+    'SELECT * FROM registration_drafts WHERE token = ?'
+  ).get(req.params.token);
+  if (!draft || draft.completed_at || new Date(draft.expires_at) < new Date()) {
+    return res.status(404).json({ error: 'This registration link is invalid, expired, or already completed' });
+  }
+  const b = { ...JSON.parse(draft.data_json), ...(req.body || {}) };
+  for (const f of ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit']) {
+    if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f.replace(/_/g, ' ') });
+  }
+  const payload = {
+    first_name: String(b.first_name).trim(), last_name: String(b.last_name).trim(),
+    phone: normalisePhone(b.phone), title: b.title || null, designation: b.designation || null,
+    pvc_no: b.pvc_no ? String(b.pvc_no).toUpperCase().replace(/\s/g, '') : null,
+    nin: b.nin ? String(b.nin).replace(/\D/g, '') : null, bank_name: b.bank_name || null,
+    account_number: b.account_number ? String(b.account_number).replace(/\D/g, '') : null,
+    account_name: b.account_name || null, lga: b.lga, ward: b.ward,
+    polling_unit: String(b.polling_unit).trim(), level: b.level,
+    lat: b.lat ?? null, lng: b.lng ?? null, accuracy: b.accuracy ?? null,
+  };
+  const result = await runChecks(payload, { uplineUserId: draft.creator_user_id });
+  const hardFail = result.flags.some((f) => f.code === 'format' || f.code === 'duplicate');
+  if (hardFail) return res.status(409).json({ error: 'This entry did not pass validation', flags: result.flags });
+  const info = await db.prepare(
+    'INSERT INTO members (code,first_name,last_name,phone,title,designation,pvc_no,nin,bank_name,account_number,account_name,lga,ward,polling_unit,level,upline_user_id,lat,lng,accuracy,captured_at,status,checks_json,risk_score,risk_flags,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+  ).run(referralCode('OYO'), payload.first_name, payload.last_name, payload.phone, payload.title,
+    payload.designation, payload.pvc_no, payload.nin, payload.bank_name, payload.account_number,
+    payload.account_name, payload.lga, payload.ward, payload.polling_unit, payload.level,
+    draft.creator_user_id, payload.lat, payload.lng, payload.accuracy,
+    payload.lat != null ? nowISO() : null, result.riskScore >= 50 ? 'flagged' : 'pending',
+    JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
+  await db.prepare('UPDATE registration_drafts SET completed_at = ? WHERE id = ?').run(nowISO(), draft.id);
+  res.status(201).json({ id: Number(info.lastInsertRowid), status: result.riskScore >= 50 ? 'flagged' : 'pending' });
+}));
 
 app.post('/api/bank/resolve', authenticate, wrap(async (req, res) => {
   const accountNumber = String(req.body?.account_number || '').replace(/\D/g, '');
@@ -707,12 +775,26 @@ app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async
 }));
 
 app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) => {
-  const { status } = req.body || {};
-  if (!['active', 'suspended'].includes(status)) {
-    return res.status(400).json({ error: 'status must be active or suspended' });
+  const b = req.body || {};
+  if (b.status !== undefined) {
+    if (!['active', 'suspended'].includes(b.status)) {
+      return res.status(400).json({ error: 'status must be active or suspended' });
+    }
+    await db.prepare('UPDATE users SET status = ? WHERE id = ?').run(b.status, req.params.id);
+    audit(req.user.id, req.user.username, 'user_' + b.status, 'user', Number(req.params.id), null, ip(req));
+    return res.json({ ok: true });
   }
-  await db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, req.params.id);
-  audit(req.user.id, req.user.username, 'user_' + status, 'user', Number(req.params.id), null, ip(req));
+
+  for (const f of ['full_name', 'role', 'scope_type']) {
+    if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
+  }
+  const office = b.role === 'candidate' ? (b.office || null) : null;
+  await db.prepare(
+    'UPDATE users SET full_name = ?, phone = ?, role = ?, office = ?, scope_type = ?, scope_value = ? WHERE id = ?'
+  ).run(b.full_name.trim(), b.phone || null, b.role, office,
+    b.scope_type, b.scope_value || null, req.params.id);
+  audit(req.user.id, req.user.username, 'user_updated', 'user', Number(req.params.id),
+    { role: b.role, scope_type: b.scope_type }, ip(req));
   res.json({ ok: true });
 }));
 

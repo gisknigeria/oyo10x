@@ -54,6 +54,17 @@ export const api = {
   form: (p, formData) => request(p, { method: 'POST', body: formData }),
 };
 
+export async function publicRequest(path, options = {}) {
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const err = new Error(data.error || 'Request failed'); err.data = data; err.status = res.status; throw err; }
+  return data;
+}
+
 /** Trigger a CSV download through the authenticated endpoint. */
 export async function downloadCsv(path, filename) {
   const res = await fetch(API_BASE + '/api' + path, {

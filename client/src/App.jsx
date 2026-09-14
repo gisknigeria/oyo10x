@@ -17,6 +17,7 @@ import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
 import AdminData from './pages/AdminData.jsx';
 import Verification from './pages/Verification.jsx';
+import PublicRegistration from './pages/PublicRegistration.jsx';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -145,6 +146,7 @@ export default function App() {
   if (!me) {
     return (
       <Routes>
+        <Route path="/complete-registration/:token" element={<PublicRegistrationRoute />} />
         <Route path="*" element={<Login onSignIn={signIn} />} />
       </Routes>
     );
@@ -173,4 +175,9 @@ export default function App() {
       </Shell>
     </AuthContext.Provider>
   );
+}
+
+function PublicRegistrationRoute() {
+  const location = window.location.pathname;
+  return <PublicRegistration token={location.split('/').pop()} />;
 }

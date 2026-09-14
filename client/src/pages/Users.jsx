@@ -11,6 +11,7 @@ const SCOPES = [
   { v: 'lga', label: 'Single LGA' },
   { v: 'ward', label: 'Single ward' },
   { v: 'polling_unit', label: 'Single polling unit' },
+  { v: 'polling_unit', label: 'Single polling unit' },
 ];
 const OFFICES = ['Governor', 'Deputy Governor', 'Senator',
   'House of Representatives', 'House of Assembly'];
@@ -168,12 +169,65 @@ function NewUser({ geo, onClose, onSaved }) {
   );
 }
 
+function EditUser({ user, geo, onClose, onSaved }) {
+  const [u, setU] = useState({ ...user });
+  const [location, setLocation] = useState({ lga: '', ward: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const set = (key) => (e) => setU((s) => ({ ...s, [key]: e.target.value }));
+  const pollingWards = geo?.polling_units?.[location.lga] || {};
+  const pollingUnits = pollingWards[location.ward] || [];
+  const save = async () => {
+    setBusy(true); setError('');
+    try { await api.patch('/users/' + user.id, u); onSaved(); onClose(); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title={'Edit ' + user.username} onClose={onClose} footer={
+      <div className="btn-row"><button className="btn" onClick={save} disabled={busy || !u.full_name.trim()}>
+        {busy && <span className="spinner" />} Save changes
+      </button><button className="btn secondary" onClick={onClose}>Cancel</button></div>
+    }>
+      {error && <Alert type="error">{error}</Alert>}
+      <div className="grid grid-2">
+        <Field label="Full name" required><input value={u.full_name} onChange={set('full_name')} /></Field>
+        <Field label="Phone"><input value={u.phone || ''} onChange={set('phone')} /></Field>
+      </div>
+      <div className="grid grid-2">
+        <Field label="Role"><select value={u.role} onChange={set('role')}>
+          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+        </select></Field>
+        {u.role === 'candidate' && <Field label="Office"><select value={u.office || ''} onChange={set('office')}>
+          {OFFICES.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select></Field>}
+      </div>
+      <Field label="Scope"><select value={u.scope_type} onChange={(e) => setU((s) => ({ ...s, scope_type: e.target.value, scope_value: '' }))}>
+        {SCOPES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
+      </select></Field>
+      {u.scope_type === 'polling_unit' ? <>
+        <Field label="LGA"><select value={location.lga} onChange={(e) => { setLocation({ lga: e.target.value, ward: '' }); setU((s) => ({ ...s, scope_value: '' })); }}>
+          <option value="">Select an LGA</option>{(geo?.lgas || []).map((l) => <option key={l} value={l}>{l}</option>)}
+        </select></Field>
+        <Field label="Ward"><select value={location.ward} disabled={!location.lga} onChange={(e) => { setLocation((s) => ({ ...s, ward: e.target.value })); setU((s) => ({ ...s, scope_value: '' })); }}>
+          <option value="">Select a ward</option>{Object.keys(pollingWards).map((w) => <option key={w} value={w}>{w}</option>)}
+        </select></Field>
+        <Field label="Polling unit"><select value={u.scope_value?.split('|')[2] || ''} disabled={!location.ward} onChange={(e) => setU((s) => ({ ...s, scope_value: [location.lga, location.ward, e.target.value].join('|') }))}>
+          <option value="">Select a polling unit</option>{pollingUnits.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select></Field>
+      </> : u.scope_type !== 'state' && <Field label="Scope value"><select value={u.scope_value || ''} onChange={set('scope_value')}>
+        <option value="">Select</option>{(!geo ? [] : u.scope_type === 'lga' ? geo.all_lgas : u.scope_type === 'ward' ? Object.values(geo.wards).flat() : u.scope_type === 'senatorial' ? geo.senatorial : u.scope_type === 'federal' ? geo.federal : geo.state_const).map((v) => <option key={v} value={v}>{v}</option>)}
+      </select></Field>}
+    </Modal>
+  );
+}
+
 export default function Users() {
   const [rows, setRows] = useState(null);
   const [geo, setGeo] = useState(null);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
   const [reset, setReset] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [q, setQ] = useState('');
 
   const load = () => api.get('/users').then((d) => setRows(d.rows)).catch((e) => setError(e.message));
@@ -219,6 +273,7 @@ export default function Users() {
           </dl>
         </Modal>
       )}
+      {editing && <EditUser user={editing} geo={geo} onClose={() => setEditing(null)} onSaved={load} />}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total logins" value={num(rows.length)} accent />
@@ -275,6 +330,7 @@ export default function Users() {
                     <td><Status value={u.status} /></td>
                     <td>
                       <div className="btn-row">
+                        <button className="btn sm secondary" onClick={() => setEditing(u)}>Edit</button>
                         <button className="btn sm secondary" onClick={() => doReset(u)}>
                           Reset password
                         </button>

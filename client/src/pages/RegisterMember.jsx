@@ -28,6 +28,7 @@ export default function RegisterMember() {
   const [conflict, setConflict] = useState(null);
   const [accountState, setAccountState] = useState('idle');
   const [accountError, setAccountError] = useState('');
+  const [draftLink, setDraftLink] = useState('');
 
   useEffect(() => {
     api.get('/geo').then((g) => {
@@ -60,6 +61,16 @@ export default function RegisterMember() {
       setAccountState('error');
       setAccountError(err.data?.reason || err.data?.error || err.message);
     }
+  };
+
+  const createDraftLink = async () => {
+    setBusy(true); setError('');
+    try {
+      const draft = await api.post('/registration-drafts', form);
+      const link = window.location.origin + '/complete-registration/' + draft.token;
+      setDraftLink(link);
+      await navigator.clipboard?.writeText(link);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
 
   const captureGps = () => {
@@ -174,6 +185,16 @@ export default function RegisterMember() {
                   {DESIGNATIONS.map((d) => <option key={d} value={d} />)}
                 </datalist>
               </Field>
+            </div>
+            <div className="btn-row" style={{ marginBottom: 16 }}>
+              <button type="button" className="btn sm secondary"
+                      onClick={createDraftLink}
+                      disabled={busy || !form.first_name.trim() || !form.last_name.trim() || !form.level}>
+                Generate self-completion link
+              </button>
+              {draftLink && <span className="muted" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                Link copied: {draftLink}
+              </span>}
             </div>
 
             <div className="section-title">Location</div>
