@@ -6,6 +6,7 @@ import { useAuth } from '../App.jsx';
 
 const TITLES = ['Mr', 'Mrs', 'Miss', 'Dr', 'Engr', 'Chief', 'Alhaji', 'Alhaja', 'Pastor', 'Imam'];
 const DESIGNATIONS = [
+  'None',
   'Polling Unit Agent', 'Ward Supervisor', 'Community Mobiliser', 'Youth Leader',
   'Women Leader', 'Community Participant', 'LGA Ambassador', 'Ward Champion',
 ];
@@ -178,12 +179,10 @@ export default function RegisterMember() {
                   ))}
                 </select>
               </Field>
-              <Field label="Designation" hint="Free text role description">
-                <input type="text" list="designations" value={form.designation}
-                       onChange={set('designation')} placeholder="e.g. Polling Unit Agent" />
-                <datalist id="designations">
-                  {DESIGNATIONS.map((d) => <option key={d} value={d} />)}
-                </datalist>
+              <Field label="Designation" hint="Optional role description">
+                <select value={form.designation} onChange={set('designation')}>
+                  {DESIGNATIONS.map((d) => <option key={d} value={d === 'None' ? '' : d}>{d}</option>)}
+                </select>
               </Field>
             </div>
             <div className="btn-row" style={{ marginBottom: 16 }}>

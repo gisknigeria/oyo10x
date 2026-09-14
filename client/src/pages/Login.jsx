@@ -5,6 +5,7 @@ import { Crest, CandidatePortrait, GoldRule, CAMPAIGN } from '../components/Bran
 export default function Login({ onSignIn }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -37,7 +38,9 @@ export default function Login({ onSignIn }) {
           </div>
 
           <h1 className="login-headline">
-            Make <em>Oyo 10X</em> Better
+            <span>Make</span>
+            <em>Oyo 10X</em>
+            <span>Better</span>
           </h1>
           <div className="login-subhead">{CAMPAIGN.subhead}</div>
         </div>
@@ -83,11 +86,18 @@ export default function Login({ onSignIn }) {
               />
             </Field>
             <Field label="Password" required>
-              <input
-                type="password" value={password} autoComplete="current-password"
+              <div className="password-field">
+                <input
+                type={showPassword ? 'text' : 'password'} value={password} autoComplete="current-password"
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Issued password"
-              />
+                placeholder="password"
+                />
+                <button type="button" className="password-toggle"
+                        onClick={() => setShowPassword((visible) => !visible)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </Field>
             <button className="btn" disabled={busy || !username || !password}>
               {busy && <span className="spinner" />}
@@ -104,11 +114,6 @@ export default function Login({ onSignIn }) {
             </div>
           </div>
 
-          <img
-            className="login-poster"
-            src="/brand/campaign-poster.png"
-            alt="OYO 10X campaign poster"
-          />
         </div>
       </main>
     </div>
