@@ -321,8 +321,9 @@ a:hover { text-decoration: underline; }
     margin-top: 12px;
     font-size: 10.5px;
     letter-spacing: .14em;
-    color: rgba(207, 227, 216, 0.72);
-    font-weight: 700;
+    color: #ffffff;
+    font-weight: 800;
+    opacity: 1;
   }
   .mobile-nav-panel .nav a {
     padding: 12px 12px;
@@ -330,7 +331,7 @@ a:hover { text-decoration: underline; }
     border-radius: 12px;
     margin-bottom: 4px;
     color: #ffffff;
-    font-weight: 700;
+    font-weight: 800;
     border: 1px solid transparent;
     letter-spacing: 0.01em;
   }
