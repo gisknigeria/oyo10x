@@ -102,9 +102,9 @@ function scopedLgas(user) {
 
 // Unauthenticated, so platform health checks (Render, Fly, Cloud Run) get a 200.
 // Deliberately exposes no data beyond liveness.
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   try {
-    const users = db.prepare('SELECT COUNT(*) n FROM users').get().n;
+    const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
     res.json({ status: 'ok', seeded: users > 0, uptime: Math.round(process.uptime()) });
   } catch (e) {
     res.status(503).json({ status: 'degraded', error: e.message });
@@ -115,19 +115,19 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/auth/login', wrap(async (req, res) => {
   const { username, password } = req.body || {};
-  const user = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
+  const user = await db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
     .get(String(username || '').trim());
 
   if (!user || !verifyPassword(password || '', user.password_hash)) {
-    audit(null, username, 'login_failed', 'user', null, null, ip(req));
+    await audit(null, username, 'login_failed', 'user', null, null, ip(req));
     return res.status(401).json({ error: 'Incorrect username or password' });
   }
   if (user.status !== 'active') {
     return res.status(403).json({ error: 'This account has been suspended' });
   }
 
-  touchLogin(user.id);
-  audit(user.id, user.username, 'login', 'user', user.id, null, ip(req));
+  await touchLogin(user.id);
+  await audit(user.id, user.username, 'login', 'user', user.id, null, ip(req));
   delete user.password_hash;
   res.json({ token: issueToken(user), user });
 }));
@@ -149,14 +149,14 @@ app.get('/api/me', authenticate, (req, res) => {
 
 app.post('/api/auth/change-password', authenticate, wrap(async (req, res) => {
   const { current_password, new_password } = req.body || {};
-  const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+  const row = await db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
   if (!verifyPassword(current_password || '', row.password_hash)) {
     return res.status(400).json({ error: 'Current password is incorrect' });
   }
   if (!new_password || new_password.length < 8) {
     return res.status(400).json({ error: 'New password must be at least 8 characters' });
   }
-  db.prepare('UPDATE users SET password_hash = ?, must_reset = 0 WHERE id = ?')
+  await db.prepare('UPDATE users SET password_hash = ?, must_reset = 0 WHERE id = ?')
     .run(hashPassword(new_password), req.user.id);
   audit(req.user.id, req.user.username, 'password_changed', 'user', req.user.id, null, ip(req));
   res.json({ ok: true });
@@ -231,7 +231,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   }
 
   const code = referralCode('OYO');
-  const info = db.prepare(
+  const info = await db.prepare(
     'INSERT INTO members (code,first_name,last_name,phone,title,designation,pvc_no,nin,'
     + 'bank_name,account_number,account_name,lga,ward,polling_unit,level,'
     + 'upline_user_id,upline_member_id,lat,lng,accuracy,captured_at,status,'
@@ -274,8 +274,8 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   const offset = Number(req.query.offset) || 0;
   const clause = where.join(' AND ');
 
-  const total = db.prepare('SELECT COUNT(*) n FROM members WHERE ' + clause).get(...params).n;
-  const rows = db.prepare(
+  const total = (await db.prepare('SELECT COUNT(*) n FROM members WHERE ' + clause).get(...params)).n;
+  const rows = await db.prepare(
     'SELECT m.*, u.full_name upline_name, u.username upline_username '
     + 'FROM members m LEFT JOIN users u ON u.id = m.upline_user_id '
     + 'WHERE ' + clause.replace(/\b(status|lga|ward|level|first_name|last_name|phone|code|polling_unit|upline_user_id|upline_member_id)\b/g, 'm.$1')
@@ -287,7 +287,7 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
 
 app.get('/api/members/:id', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
-  const m = db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
+  const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
     .get(req.params.id, ...scope.params);
   if (!m) return res.status(404).json({ error: 'Member not found or outside your scope' });
 
@@ -297,14 +297,14 @@ app.get('/api/members/:id', authenticate, wrap(async (req, res) => {
 
   res.json({
     member: m,
-    downline: downlineCounts(m.id),
-    downline_rows: db.prepare(
+    downline: await downlineCounts(m.id),
+    downline_rows: await db.prepare(
       'SELECT id,code,first_name,last_name,phone,level,status,ward,polling_unit '
       + 'FROM members WHERE upline_member_id = ? ORDER BY created_at DESC'
     ).all(m.id),
-    eligibility: eligibility(m, per),
-    points: pointsBreakdown(m.id, per),
-    submissions: db.prepare(
+    eligibility: await eligibility(m, per),
+    points: await pointsBreakdown(m.id, per),
+    submissions: await db.prepare(
       'SELECT s.*, t.title task_title, t.points task_points FROM submissions s '
       + 'JOIN tasks t ON t.id = s.task_id WHERE s.member_id = ? ORDER BY s.created_at DESC'
     ).all(m.id),
@@ -321,25 +321,25 @@ app.post('/api/members/:id/review', authenticate, wrap(async (req, res) => {
     return res.status(400).json({ error: 'status must be verified, rejected or pending' });
   }
   const scope = memberScope(req.user);
-  const m = db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
+  const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
     .get(req.params.id, ...scope.params);
   if (!m) return res.status(404).json({ error: 'Member not found or outside your scope' });
 
-  db.prepare('UPDATE members SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
+  await db.prepare('UPDATE members SET status = ?, review_note = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?')
     .run(status, note || null, req.user.id, nowISO(), req.params.id);
 
   // A status change alters the upline's activation count, so re-score them.
-  if (m.upline_member_id) recomputeActivationPoints(m.upline_member_id);
+  if (m.upline_member_id) await recomputeActivationPoints(m.upline_member_id);
 
-  audit(req.user.id, req.user.username, 'member_' + status, 'member', m.id, { note }, ip(req));
+  await audit(req.user.id, req.user.username, 'member_' + status, 'member', m.id, { note }, ip(req));
   res.json({ ok: true, status });
 }));
 
 app.post('/api/members/:id/recheck', authenticate, requireAdmin, wrap(async (req, res) => {
-  const m = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  const m = await db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
   if (!m) return res.status(404).json({ error: 'Member not found' });
   const result = await runChecks(m, { excludeId: m.id, uplineUserId: m.upline_user_id });
-  db.prepare('UPDATE members SET checks_json = ?, risk_score = ?, risk_flags = ? WHERE id = ?')
+  await db.prepare('UPDATE members SET checks_json = ?, risk_score = ?, risk_flags = ? WHERE id = ?')
     .run(JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), m.id);
   res.json(result);
 }));
@@ -352,17 +352,17 @@ app.get('/api/network', authenticate, wrap(async (req, res) => {
 
   // Direct registrations by this login (the top of their visible tree).
   const roots = rootId
-    ? db.prepare('SELECT * FROM members WHERE id = ?').all(rootId)
-    : db.prepare('SELECT * FROM members WHERE upline_user_id = ? AND (' + scope.sql + ') '
+    ? await db.prepare('SELECT * FROM members WHERE id = ?').all(rootId)
+    : await db.prepare('SELECT * FROM members WHERE upline_user_id = ? AND (' + scope.sql + ') '
                  + 'ORDER BY created_at DESC LIMIT 500')
         .all(req.user.id, ...scope.params);
 
-  const childStmt = db.prepare(
+  const childStmt = await db.prepare(
     'SELECT id,code,first_name,last_name,phone,level,status,lga,ward,polling_unit,risk_score '
     + 'FROM members WHERE upline_member_id = ? ORDER BY created_at'
   );
 
-  const build = (m, depth) => {
+  const build = async (m, depth) => {
     const node = {
       id: m.id, code: m.code, name: m.first_name + ' ' + m.last_name,
       phone: m.phone, level: m.level, status: m.status,
@@ -370,25 +370,26 @@ app.get('/api/network', authenticate, wrap(async (req, res) => {
       risk_score: m.risk_score, children: [],
     };
     if (depth < 3) {
-      for (const c of childStmt.all(m.id)) node.children.push(build(c, depth + 1));
+      for (const c of await childStmt.all(m.id)) node.children.push(await build(c, depth + 1));
     } else {
-      node.truncated = childStmt.all(m.id).length;
+      node.truncated = (await childStmt.all(m.id)).length;
     }
-    const counts = downlineCounts(m.id);
+    const counts = await downlineCounts(m.id);
     node.verified_downline = counts.verified;
     node.total_downline = counts.total;
     node.meets_baseline = counts.verified >= BASELINE_ACTIVATIONS;
     return node;
   };
 
-  res.json({ baseline: BASELINE_ACTIVATIONS, roots: roots.map((m) => build(m, 0)) });
+  res.json({ baseline: BASELINE_ACTIVATIONS,
+    roots: await Promise.all(roots.map((m) => build(m, 0))) });
 }));
 
 /* --------------------------------- tasks --------------------------------- */
 
 app.get('/api/tasks', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT t.*, (SELECT COUNT(*) FROM submissions s WHERE s.task_id = t.id) submissions, '
     + "(SELECT COUNT(*) FROM submissions s WHERE s.task_id = t.id AND s.status = 'approved') approved "
     + 'FROM tasks t WHERE t.period = ? ORDER BY t.created_at DESC'
@@ -401,7 +402,7 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
   const b = req.body || {};
   if (!String(b.title || '').trim()) return res.status(400).json({ error: 'Task title is required' });
 
-  const info = db.prepare(
+  const info = await db.prepare(
     'INSERT INTO tasks (title,description,type,points,mandatory,requires_photo,requires_location,'
     + 'questions_json,target_level,target_scope_type,target_scope_value,period,opens_at,due_at,'
     + 'status,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -425,19 +426,19 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   if (!['open', 'closed'].includes(status)) {
     return res.status(400).json({ error: 'status must be open or closed' });
   }
-  db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, req.params.id);
+  await db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, req.params.id);
   res.json({ ok: true });
 }));
 
 /** Tasks that apply to a given member, with their submission state. */
 app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) => {
-  const m = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.memberId);
+  const m = await db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.memberId);
   if (!m) return res.status(404).json({ error: 'Member not found' });
   const per = req.query.period || currentPeriod();
-  const completion = taskCompletion(m, per);
-  const subs = db.prepare('SELECT * FROM submissions WHERE member_id = ?').all(m.id);
+  const completion = await taskCompletion(m, per);
+  const subs = await db.prepare('SELECT * FROM submissions WHERE member_id = ?').all(m.id);
   const byTask = new Map(subs.map((s) => [s.task_id, s]));
-  const all = db.prepare(
+  const all = await db.prepare(
     'SELECT * FROM tasks WHERE period = ? '
     + "AND (target_level = 'all' OR target_level = ?) "
     + "AND (target_scope_type = 'state' "
@@ -457,7 +458,7 @@ app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) =
 }));
 
 app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(async (req, res) => {
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+  const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (task.status !== 'open') return res.status(400).json({ error: 'This task is closed' });
 
@@ -465,7 +466,7 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
   if (!memberId) return res.status(400).json({ error: 'No member selected for this submission' });
 
   const scope = memberScope(req.user);
-  const m = db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
+  const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
     .get(memberId, ...scope.params);
   if (!m) return res.status(403).json({ error: 'That member is outside your scope' });
 
@@ -478,11 +479,11 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
     return res.status(400).json({ error: 'This task requires your location' });
   }
 
-  const existing = db.prepare('SELECT id FROM submissions WHERE task_id = ? AND member_id = ?')
+  const existing = await db.prepare('SELECT id FROM submissions WHERE task_id = ? AND member_id = ?')
     .get(task.id, memberId);
   if (existing) return res.status(409).json({ error: 'Already submitted for this task' });
 
-  const info = db.prepare(
+  const info = await db.prepare(
     'INSERT INTO submissions (task_id,member_id,user_id,answers_json,photo_path,lat,lng,accuracy,'
     + 'note,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
   ).run(task.id, memberId, req.user.id,
@@ -503,7 +504,7 @@ app.get('/api/submissions', authenticate, wrap(async (req, res) => {
   if (req.query.status) { where.push('s.status = ?'); params.push(req.query.status); }
   if (req.query.task_id) { where.push('s.task_id = ?'); params.push(req.query.task_id); }
 
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT s.*, t.title task_title, t.points task_points, t.type task_type, '
     + 'm.code member_code, m.first_name, m.last_name, m.lga, m.ward, m.polling_unit '
     + 'FROM submissions s JOIN tasks t ON t.id = s.task_id '
@@ -522,18 +523,18 @@ app.post('/api/submissions/:id/review', authenticate, wrap(async (req, res) => {
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ error: 'status must be approved or rejected' });
   }
-  const s = db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id);
+  const s = await db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id);
   if (!s) return res.status(404).json({ error: 'Submission not found' });
-  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(s.task_id);
+  const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(s.task_id);
 
   let awarded = 0;
   if (status === 'approved') {
-    awarded = awardTaskPoints(s, task, task.period);
+    awarded = await awardTaskPoints(s, task, task.period);
   } else {
-    db.prepare("DELETE FROM points_ledger WHERE source = 'task' AND source_id = ?").run(s.id);
+    await db.prepare("DELETE FROM points_ledger WHERE source = 'task' AND source_id = ?").run(s.id);
   }
 
-  db.prepare('UPDATE submissions SET status = ?, review_note = ?, reviewed_by = ?, '
+  await db.prepare('UPDATE submissions SET status = ?, review_note = ?, reviewed_by = ?, '
     + 'reviewed_at = ?, points_awarded = ? WHERE id = ?')
     .run(status, note || null, req.user.id, nowISO(), awarded, s.id);
 
@@ -548,12 +549,12 @@ app.get('/api/payroll', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
   const scope = memberScope(req.user);
   const levels = ['ambassador', 'champion', 'mobiliser'];
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT * FROM members WHERE (' + scope.sql + ') '
     + "AND status = 'verified' AND level IN ('ambassador','champion','mobiliser') "
     + 'ORDER BY lga, ward'
   ).all(...scope.params);
-  const result = payroll(rows, per);
+  const result = await payroll(rows, per);
   result.caps = LEVEL_CAPS;
   result.naira_per_point = NAIRA_PER_POINT;
   result.levels = levels;
@@ -567,7 +568,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
   const p = scope.params;
 
-  const totals = db.prepare(
+  const totals = await db.prepare(
     'SELECT COUNT(*) total, '
     + "SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified, "
     + "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pending, "
@@ -576,40 +577,40 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     + 'FROM members WHERE ' + scope.sql
   ).get(...p);
 
-  const byLevel = db.prepare(
+  const byLevel = await db.prepare(
     'SELECT level, COUNT(*) n FROM members WHERE ' + scope.sql + ' GROUP BY level'
   ).all(...p);
 
-  const byLga = db.prepare(
+  const byLga = await db.prepare(
     'SELECT lga, COUNT(*) total, '
     + "SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified, "
     + 'COUNT(DISTINCT ward) wards, COUNT(DISTINCT polling_unit) units '
     + 'FROM members WHERE ' + scope.sql + ' GROUP BY lga ORDER BY total DESC'
   ).all(...p);
 
-  const coverage = db.prepare(
+  const coverage = await db.prepare(
     'SELECT COUNT(DISTINCT lga) lgas, COUNT(DISTINCT ward) wards, '
     + 'COUNT(DISTINCT polling_unit) units FROM members WHERE ' + scope.sql
   ).get(...p);
 
-  const recent = db.prepare(
+  const recent = await db.prepare(
     'SELECT id,code,first_name,last_name,level,lga,ward,polling_unit,status,risk_score,created_at '
     + 'FROM members WHERE ' + scope.sql + ' ORDER BY created_at DESC LIMIT 10'
   ).all(...p);
 
-  const tasks = db.prepare(
+  const tasks = await db.prepare(
     'SELECT COUNT(*) total, '
     + "SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open "
     + 'FROM tasks WHERE period = ?'
   ).get(per);
 
-  const subs = db.prepare(
+  const subs = await db.prepare(
     'SELECT s.status, COUNT(*) n FROM submissions s JOIN members m ON m.id = s.member_id '
     + 'WHERE ' + scope.sql.replace(/\b(lga|ward|upline_user_id|upline_member_id)\b/g, 'm.$1')
     + ' GROUP BY s.status'
   ).all(...p);
 
-  const highRisk = db.prepare(
+  const highRisk = await db.prepare(
     'SELECT COUNT(*) n FROM members WHERE ' + scope.sql + ' AND risk_score >= 50'
   ).get(...p).n;
 
@@ -631,7 +632,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
 /* --------------------------------- users --------------------------------- */
 
 app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT id,username,role,office,full_name,phone,scope_type,scope_value,status,'
     + 'must_reset,last_login,created_at,'
     + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered '
@@ -645,11 +646,11 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   for (const f of ['username', 'full_name', 'role']) {
     if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
   }
-  const exists = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
+  const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
   if (exists) return res.status(409).json({ error: 'That username is already taken' });
 
   const pw = b.password || tempPassword();
-  const info = db.prepare(
+  const info = await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
     + 'scope_type,scope_value,referral_code,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
   ).run(String(b.username).trim().toLowerCase(), hashPassword(pw), 1, b.role,
@@ -663,7 +664,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
 
 app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async (req, res) => {
   const pw = tempPassword();
-  db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')
+  await db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')
     .run(hashPassword(pw), req.params.id);
   audit(req.user.id, req.user.username, 'password_reset', 'user', Number(req.params.id), null, ip(req));
   res.json({ password: pw });
@@ -674,7 +675,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   if (!['active', 'suspended'].includes(status)) {
     return res.status(400).json({ error: 'status must be active or suspended' });
   }
-  db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, req.params.id);
+  await db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, req.params.id);
   audit(req.user.id, req.user.username, 'user_' + status, 'user', Number(req.params.id), null, ip(req));
   res.json({ ok: true });
 }));
@@ -740,7 +741,7 @@ app.post('/api/admin/voter-roll/clear', authenticate, requireAdmin, wrap(async (
  * different polling unit, which is what the matcher is meant to catch.
  */
 app.get('/api/admin/voter-roll/sample.csv', authenticate, requireAdmin, wrap(async (req, res) => {
-  const members = db.prepare(
+  const members = await db.prepare(
     'SELECT * FROM members WHERE pvc_no IS NOT NULL ORDER BY RANDOM() LIMIT 4000'
   ).all();
 
@@ -797,8 +798,8 @@ app.post('/api/admin/reconcile-bank', authenticate, requireAdmin, upload.single(
 
     const source = req.file.originalname || 'bank-file';
     const stamp = nowISO();
-    const find = db.prepare('SELECT * FROM members WHERE account_number = ?');
-    const save = db.prepare(
+    const find = await db.prepare('SELECT * FROM members WHERE account_number = ?');
+    const save = await db.prepare(
       'UPDATE members SET bank_verified_name = ?, bank_verified_at = ?, '
       + 'bank_verified_source = ? WHERE id = ?'
     );
@@ -806,7 +807,7 @@ app.post('/api/admin/reconcile-bank', authenticate, requireAdmin, upload.single(
     const result = { rows: rows.length, matched: 0, unmatched: 0, confirmed: 0, mismatched: [] };
     const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
 
-    db.exec('BEGIN');
+    await db.exec('BEGIN');
     try {
       for (const r of rows) {
         const acct = String(r[acctKey] || '').replace(/\D/g, '');
@@ -831,9 +832,9 @@ app.post('/api/admin/reconcile-bank', authenticate, requireAdmin, upload.single(
           }
         }
       }
-      db.exec('COMMIT');
+      await db.exec('COMMIT');
     } catch (e) {
-      db.exec('ROLLBACK');
+      await db.exec('ROLLBACK');
       throw e;
     }
 
@@ -848,11 +849,11 @@ app.post('/api/admin/verify-bulk', authenticate, requireAdmin, wrap(async (req, 
   const scopeFilter = req.body?.only === 'pending'
     ? "WHERE status IN ('pending','flagged')" : '';
   const limit = Math.min(Number(req.body?.limit) || 500, 5000);
-  const members = db.prepare(
+  const members = await db.prepare(
     'SELECT * FROM members ' + scopeFilter + ' ORDER BY created_at DESC LIMIT ?'
   ).all(limit);
 
-  const update = db.prepare(
+  const update = await db.prepare(
     'UPDATE members SET checks_json = ?, risk_score = ?, risk_flags = ?, '
     + "status = CASE WHEN ? >= 50 AND status = 'pending' THEN 'flagged' "
     + "WHEN ? < 50 AND status = 'flagged' THEN 'pending' ELSE status END WHERE id = ?"
@@ -875,14 +876,14 @@ app.post('/api/admin/verify-bulk', authenticate, requireAdmin, wrap(async (req, 
 /** Members carrying verification flags, worst first. */
 app.get('/api/verification/queue', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
-  const rows = db.prepare(
+  const rows = await db.prepare(
     'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,'
     + 'risk_score,risk_flags,created_at FROM members WHERE (' + scope.sql + ') '
     + 'AND risk_score > 0 ORDER BY risk_score DESC, created_at DESC LIMIT 300'
   ).all(...scope.params);
   for (const r of rows) r.flags = r.risk_flags ? JSON.parse(r.risk_flags) : [];
 
-  const spread = db.prepare(
+  const spread = await db.prepare(
     'SELECT '
     + ' SUM(CASE WHEN risk_score = 0 THEN 1 ELSE 0 END) clean,'
     + ' SUM(CASE WHEN risk_score BETWEEN 1 AND 49 THEN 1 ELSE 0 END) watch,'
@@ -893,11 +894,11 @@ app.get('/api/verification/queue', authenticate, wrap(async (req, res) => {
   res.json({ rows, spread, simulated: isSimulated() });
 }));
 
-app.get('/api/admin/status', authenticate, requireAdmin, (req, res) => {
-  const rollRows = voterRollSize();
+app.get('/api/admin/status', authenticate, requireAdmin, wrap(async (req, res) => {
+  const rollRows = await voterRollSize();
   res.json({
     voter_roll_rows: rollRows,
-    voter_roll_batches: voterRollBatches(),
+    voter_roll_batches: await voterRollBatches(),
     simulated: isSimulated(),
     providers: {
       bank_resolution: process.env.PAYSTACK_SECRET_KEY ? 'configured'
@@ -909,16 +910,16 @@ app.get('/api/admin/status', authenticate, requireAdmin, (req, res) => {
         ? 'INEC extract loaded (' + rollRows + ' rows)'
         : 'no INEC extract loaded - no public API exists',
     },
-    members_total: db.prepare('SELECT COUNT(*) n FROM members').get().n,
-    audit_entries: db.prepare('SELECT COUNT(*) n FROM audit_log').get().n,
+    members_total: (await db.prepare('SELECT COUNT(*) n FROM members').get()).n,
+    audit_entries: (await db.prepare('SELECT COUNT(*) n FROM audit_log').get()).n,
   });
-});
+}));
 
-app.get('/api/admin/audit', authenticate, requireAdmin, (req, res) => {
+app.get('/api/admin/audit', authenticate, requireAdmin, wrap(async (req, res) => {
   res.json({
-    rows: db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all(),
+    rows: await db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all(),
   });
-});
+}));
 
 /* --------------------------------- export -------------------------------- */
 
@@ -934,7 +935,7 @@ function toCSV(rows, columns) {
 
 app.get('/api/export/members.csv', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
-  const rows = db.prepare('SELECT * FROM members WHERE ' + scope.sql + ' ORDER BY lga, ward')
+  const rows = await db.prepare('SELECT * FROM members WHERE ' + scope.sql + ' ORDER BY lga, ward')
     .all(...scope.params);
   const cols = ['code', 'first_name', 'last_name', 'phone', 'title', 'designation',
     'lga', 'ward', 'polling_unit', 'level', 'pvc_no', 'nin', 'bank_name',
@@ -948,11 +949,11 @@ app.get('/api/export/members.csv', authenticate, wrap(async (req, res) => {
 app.get('/api/export/payroll.csv', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
   const scope = memberScope(req.user);
-  const members = db.prepare(
+  const members = await db.prepare(
     'SELECT * FROM members WHERE (' + scope.sql + ") AND status = 'verified' "
     + "AND level IN ('ambassador','champion','mobiliser')"
   ).all(...scope.params);
-  const { rows } = payroll(members, per);
+  const { rows } = await payroll(members, per);
   const cols = ['code', 'name', 'level', 'lga', 'ward', 'verified_downline',
     'raw_points', 'capped_points', 'eligible', 'amount_naira',
     'bank_name', 'account_number', 'account_name'];
@@ -984,7 +985,7 @@ app.use((err, _req, res, _next) => {
  */
 async function maybeSeed() {
   if (process.env.SEED_ON_BOOT !== '1') return;
-  if (db.prepare('SELECT COUNT(*) n FROM users').get().n > 0) return;
+  if ((await db.prepare('SELECT COUNT(*) n FROM users').get()).n > 0) return;
   console.log('SEED_ON_BOOT: empty database detected, seeding...');
   try {
     await import('./seed.js');
@@ -994,11 +995,10 @@ async function maybeSeed() {
   }
 }
 
-await maybeSeed();
-
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log('OYO 10X API listening on port ' + PORT);
-  const users = db.prepare('SELECT COUNT(*) n FROM users').get().n;
+  await maybeSeed();
+  const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');
   if (!process.env.OYO_SECRET) {
     console.warn('WARNING: OYO_SECRET is not set. Sessions use the development '

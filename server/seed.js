@@ -24,14 +24,14 @@ const PER = currentPeriod();
 
 if (RESET) {
   for (const t of ['points_ledger', 'submissions', 'tasks', 'members', 'users', 'audit_log']) {
-    db.exec('DELETE FROM ' + t);
+    await db.exec('DELETE FROM ' + t);
   }
-  db.exec("DELETE FROM sqlite_sequence WHERE name IN "
+  await db.exec("DELETE FROM sqlite_sequence WHERE name IN "
     + "('points_ledger','submissions','tasks','members','users','audit_log')");
   console.log('Existing data cleared.');
 }
 
-if (db.prepare('SELECT COUNT(*) n FROM users').get().n > 0 && !RESET) {
+if ((await db.prepare('SELECT COUNT(*) n FROM users').get()).n > 0 && !RESET) {
   console.log('Database already seeded. Re-run with --reset to rebuild.');
   process.exit(0);
 }
@@ -41,15 +41,15 @@ const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g
 const pick = (arr) => arr[crypto.randomInt(arr.length)];
 const randDigits = (n) => Array.from({ length: n }, () => crypto.randomInt(10)).join('');
 
-const insertUser = db.prepare(
+const insertUser = await db.prepare(
   'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
   + 'scope_type,scope_value,member_id,referral_code,status,created_at) '
   + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
 );
 
-function createUser(o) {
+async function createUser(o) {
   const pw = o.password || tempPassword();
-  const info = insertUser.run(
+  const info = await insertUser.run(
     o.username, hashPassword(pw), o.must_reset === 0 ? 0 : 1, o.role,
     o.office || null, o.full_name, o.phone || null,
     o.scope_type || 'state', o.scope_value || null, o.member_id || null,
@@ -65,7 +65,7 @@ function createUser(o) {
 
 /* ------------------------------ 1. admin ------------------------------ */
 
-const adminId = createUser({
+const adminId = await createUser({
   username: 'admin', password: 'oyo10x-admin', must_reset: 0,
   role: 'superadmin', full_name: 'Programme Administrator',
   scope_type: 'state',
@@ -82,22 +82,22 @@ const LAST = ['Adeyemi', 'Ogunleye', 'Balogun', 'Akinwale', 'Oyelaran', 'Adigun'
   'Salami', 'Oyebode', 'Aremu', 'Lawal', 'Odunsi', 'Ajayi', 'Ekundayo'];
 const name = () => pick(FIRST) + ' ' + pick(LAST);
 
-createUser({ username: 'gov.oyo', role: 'candidate', office: 'Governor',
+await createUser({ username: 'gov.oyo', role: 'candidate', office: 'Governor',
   full_name: name(), scope_type: 'state' });
-createUser({ username: 'dgov.oyo', role: 'candidate', office: 'Deputy Governor',
+await createUser({ username: 'dgov.oyo', role: 'candidate', office: 'Deputy Governor',
   full_name: name(), scope_type: 'state' });
 
 for (const district of Object.keys(SENATORIAL)) {
-  createUser({ username: 'sen.' + slug(district), role: 'candidate', office: 'Senator',
+  await createUser({ username: 'sen.' + slug(district), role: 'candidate', office: 'Senator',
     full_name: name(), scope_type: 'senatorial', scope_value: district });
 }
 for (const fc of Object.keys(FEDERAL)) {
-  createUser({ username: 'rep.' + slug(fc).slice(0, 28), role: 'candidate',
+  await createUser({ username: 'rep.' + slug(fc).slice(0, 28), role: 'candidate',
     office: 'House of Representatives', full_name: name(),
     scope_type: 'federal', scope_value: fc });
 }
 for (const sc of Object.keys(STATE_CONST)) {
-  createUser({ username: 'hoa.' + slug(sc.replace(' State Constituency', '')), role: 'candidate',
+  await createUser({ username: 'hoa.' + slug(sc.replace(' State Constituency', '')), role: 'candidate',
     office: 'House of Assembly', full_name: name(),
     scope_type: 'state_const', scope_value: sc });
 }
@@ -105,7 +105,7 @@ console.log('51 candidate logins created (1 Gov, 1 Deputy, 3 Senators, 14 Reps, 
 
 /* ------------------------- 3. demo field network ------------------------ */
 
-const insertMember = db.prepare(
+const insertMember = await db.prepare(
   'INSERT INTO members (code,first_name,last_name,phone,title,designation,pvc_no,nin,'
   + 'bank_name,account_number,account_name,lga,ward,polling_unit,level,upline_user_id,'
   + 'upline_member_id,lat,lng,accuracy,captured_at,status,risk_score,risk_flags,created_at) '
@@ -124,7 +124,7 @@ function validNuban(bankName, corrupt = false) {
   return serial + (corrupt ? (cd + 1 + crypto.randomInt(8)) % 10 : cd);
 }
 
-function makeMember(o) {
+async function makeMember(o) {
   const first = o.first || pick(FIRST);
   const last = o.last || pick(LAST);
   const bank = pick(BANKS);
@@ -135,7 +135,7 @@ function makeMember(o) {
   // Cluster demo coordinates inside Oyo State.
   const lat = 7.3 + Math.random() * 1.2;
   const lng = 3.3 + Math.random() * 0.8;
-  const info = insertMember.run(
+  const info = await insertMember.run(
     referralCode('OYO'), first, last, nextPhone(),
     pick(['Mr', 'Mrs', 'Miss', 'Chief', 'Alhaji', 'Dr']),
     o.designation || 'Community Mobiliser',
@@ -155,17 +155,17 @@ const DEMO_LGAS = ['Ibadan North', 'Ogbomosho North', 'Iseyin'];
 const demoLogins = [];
 let participantCount = 0;
 
-db.exec('BEGIN');
+await db.exec('BEGIN');
 
 for (const lga of DEMO_LGAS) {
   const wards = WARDS[lga];
 
-  const ambMemberId = makeMember({
+  const ambMemberId = await makeMember({
     lga, ward: wards[0], polling_unit: wards[0] + ' / PU 001',
     level: 'ambassador', designation: 'LGA Ambassador', upline_user_id: adminId,
   });
-  const amb = db.prepare('SELECT * FROM members WHERE id = ?').get(ambMemberId);
-  const ambUserId = createUser({
+  const amb = await db.prepare('SELECT * FROM members WHERE id = ?').get(ambMemberId);
+  const ambUserId = await createUser({
     username: 'amb.' + slug(lga), role: 'ambassador',
     full_name: amb.first_name + ' ' + amb.last_name, phone: amb.phone,
     scope_type: 'lga', scope_value: lga, member_id: ambMemberId,
@@ -176,16 +176,16 @@ for (const lga of DEMO_LGAS) {
   const champCount = 10 + crypto.randomInt(3);
   for (let c = 0; c < champCount; c++) {
     const ward = wards[c % wards.length];
-    const champMemberId = makeMember({
+    const champMemberId = await makeMember({
       lga, ward, polling_unit: ward + ' / PU ' + String(c + 1).padStart(3, '0'),
       level: 'champion', designation: 'Ward Champion',
       upline_user_id: ambUserId, upline_member_id: ambMemberId,
     });
-    const champ = db.prepare('SELECT * FROM members WHERE id = ?').get(champMemberId);
+    const champ = await db.prepare('SELECT * FROM members WHERE id = ?').get(champMemberId);
 
     let champUserId = null;
     if (c === 0) {
-      champUserId = createUser({
+      champUserId = await createUser({
         username: 'champ.' + slug(lga), role: 'champion',
         full_name: champ.first_name + ' ' + champ.last_name, phone: champ.phone,
         scope_type: 'ward', scope_value: ward, member_id: champMemberId,
@@ -195,16 +195,16 @@ for (const lga of DEMO_LGAS) {
 
     const mobCount = 9 + crypto.randomInt(4);
     for (let mo = 0; mo < mobCount; mo++) {
-      const mobMemberId = makeMember({
+      const mobMemberId = await makeMember({
         lga, ward, polling_unit: ward + ' / PU ' + String(100 + mo).padStart(3, '0'),
         level: 'mobiliser', designation: 'Polling Unit Mobiliser',
         upline_user_id: champUserId || ambUserId, upline_member_id: champMemberId,
       });
-      const mob = db.prepare('SELECT * FROM members WHERE id = ?').get(mobMemberId);
+      const mob = await db.prepare('SELECT * FROM members WHERE id = ?').get(mobMemberId);
 
       let mobUserId = null;
       if (c === 0 && mo === 0) {
-        mobUserId = createUser({
+        mobUserId = await createUser({
           username: 'mob.' + slug(lga), role: 'mobiliser',
           full_name: mob.first_name + ' ' + mob.last_name, phone: mob.phone,
           scope_type: 'pu', scope_value: mob.polling_unit, member_id: mobMemberId,
@@ -216,7 +216,7 @@ for (const lga of DEMO_LGAS) {
       // the baseline and members earning bonus points above it.
       const n = 9 + crypto.randomInt(5);
       for (let i = 0; i < n; i++) {
-        makeMember({
+        await makeMember({
           lga, ward, polling_unit: mob.polling_unit,
           level: 'participant', designation: 'Community Participant',
           upline_user_id: mobUserId || champUserId || ambUserId,
@@ -229,13 +229,13 @@ for (const lga of DEMO_LGAS) {
   }
 }
 
-db.exec('COMMIT');
+await db.exec('COMMIT');
 console.log('Demo network built across ' + DEMO_LGAS.join(', ')
   + ' (' + participantCount + ' community participants).');
 
 /* ---------------------------- 4. tasks & work --------------------------- */
 
-const insertTask = db.prepare(
+const insertTask = await db.prepare(
   'INSERT INTO tasks (title,description,type,points,mandatory,requires_photo,requires_location,'
   + 'questions_json,target_level,target_scope_type,target_scope_value,period,due_at,status,'
   + 'created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -270,27 +270,31 @@ const TASKS = [
     desc: 'Optional. Convene or support a community meeting in your ward.' },
 ];
 
-const taskIds = TASKS.map((t) => Number(insertTask.run(
-  t.title, t.desc, t.type, t.points, t.mandatory === 0 ? 0 : 1, t.photo, 1,
-  t.questions ? JSON.stringify(t.questions) : null,
-  t.level, 'state', null, PER, null, 'open', adminId, nowISO()
-).lastInsertRowid));
+const taskIds = [];
+for (const t of TASKS) {
+  const info = await insertTask.run(
+    t.title, t.desc, t.type, t.points, t.mandatory === 0 ? 0 : 1, t.photo, 1,
+    t.questions ? JSON.stringify(t.questions) : null,
+    t.level, 'state', null, PER, null, 'open', adminId, nowISO()
+  );
+  taskIds.push(Number(info.lastInsertRowid));
+}
 
-const allTasks = db.prepare('SELECT * FROM tasks WHERE period = ?').all(PER);
+const allTasks = await db.prepare('SELECT * FROM tasks WHERE period = ?').all(PER);
 const mandatoryByLevel = (level) =>
   allTasks.filter((t) => t.mandatory === 1 && (t.target_level === 'all' || t.target_level === level));
 
 // Generate submissions so the payroll and eligibility screens have real data.
-const insertSub = db.prepare(
+const insertSub = await db.prepare(
   'INSERT INTO submissions (task_id,member_id,user_id,answers_json,photo_path,lat,lng,'
   + 'accuracy,note,status,points_awarded,reviewed_by,reviewed_at,created_at) '
   + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
 );
 
-const everyone = db.prepare("SELECT * FROM members WHERE status = 'verified'").all();
+const everyone = await db.prepare("SELECT * FROM members WHERE status = 'verified'").all();
 let subCount = 0;
 
-db.exec('BEGIN');
+await db.exec('BEGIN');
 
 for (const m of everyone) {
   const required = mandatoryByLevel(m.level);
@@ -305,7 +309,7 @@ for (const m of everyone) {
       ? JSON.stringify({ q1: pick(['Roads', 'Water', 'Electricity', 'Healthcare', 'Security']),
                          q2: pick(['Yes, all adults', 'Some adults']), q3: '' })
       : null;
-    const info = insertSub.run(task.id, m.id, null, answers, null,
+    const info = await insertSub.run(task.id, m.id, null, answers, null,
       m.lat, m.lng, 15, null, 'approved', task.points, adminId, nowISO(), nowISO());
     awardTaskPoints({ id: Number(info.lastInsertRowid), member_id: m.id, user_id: null },
       task, PER);
@@ -314,7 +318,7 @@ for (const m of everyone) {
 }
 
 // A handful of submissions left pending so the review queue is not empty.
-const pendingPool = db.prepare(
+const pendingPool = await db.prepare(
   "SELECT * FROM members WHERE status = 'verified' AND level = 'mobiliser' LIMIT 12"
 ).all();
 const optionalTask = allTasks.find((t) => t.mandatory === 0);
@@ -328,7 +332,7 @@ for (const m of everyone) {
   if (m.level !== 'participant') recomputeActivationPoints(m.id, PER);
 }
 
-db.exec('COMMIT');
+await db.exec('COMMIT');
 console.log(TASKS.length + ' tasks created, ' + subCount + ' submissions generated.');
 
 /* ------------------------- 5. credentials export ------------------------ */
@@ -342,11 +346,11 @@ fs.writeFileSync(csvPath,
     .join('\n'));
 
 const counts = {
-  users: db.prepare('SELECT COUNT(*) n FROM users').get().n,
-  members: db.prepare('SELECT COUNT(*) n FROM members').get().n,
-  verified: db.prepare("SELECT COUNT(*) n FROM members WHERE status='verified'").get().n,
-  tasks: db.prepare('SELECT COUNT(*) n FROM tasks').get().n,
-  submissions: db.prepare('SELECT COUNT(*) n FROM submissions').get().n,
+  users: await db.prepare('SELECT COUNT(*) n FROM users').get().n,
+  members: await db.prepare('SELECT COUNT(*) n FROM members').get().n,
+  verified: await db.prepare("SELECT COUNT(*) n FROM members WHERE status='verified'").get().n,
+  tasks: await db.prepare('SELECT COUNT(*) n FROM tasks').get().n,
+  submissions: await db.prepare('SELECT COUNT(*) n FROM submissions').get().n,
 };
 
 console.log('\n------------------------------------------------------');

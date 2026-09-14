@@ -39,14 +39,14 @@ export const BASELINE_ACTIVATIONS = 10;
 export const BONUS_POINTS_PER_EXTRA = 2;
 
 /** Direct downline of a member, restricted to verified rows. */
-export function directDownline(memberId, verifiedOnly = true) {
+export async function directDownline(memberId, verifiedOnly = true) {
   const sql = 'SELECT * FROM members WHERE upline_member_id = ?'
     + (verifiedOnly ? " AND status = 'verified'" : '');
-  return db.prepare(sql).all(memberId);
+  return await db.prepare(sql).all(memberId);
 }
 
-export function downlineCounts(memberId) {
-  const row = db.prepare(
+export async function downlineCounts(memberId) {
+  const row = await db.prepare(
     'SELECT '
     + " COUNT(*) total,"
     + " SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) verified,"
@@ -66,16 +66,16 @@ export function downlineCounts(memberId) {
  * Recompute activation bonus for a member in a period and write it to the
  * ledger as a single idempotent row (replaces any earlier activation row).
  */
-export function recomputeActivationPoints(memberId, per = currentPeriod()) {
-  const { verified } = downlineCounts(memberId);
+export async function recomputeActivationPoints(memberId, per = currentPeriod()) {
+  const { verified } = await downlineCounts(memberId);
   const extra = Math.max(0, verified - BASELINE_ACTIVATIONS);
   const points = extra * BONUS_POINTS_PER_EXTRA;
 
-  db.prepare("DELETE FROM points_ledger WHERE member_id = ? AND period = ? AND source = 'activation'")
+  await db.prepare("DELETE FROM points_ledger WHERE member_id = ? AND period = ? AND source = 'activation'")
     .run(memberId, per);
 
   if (points > 0) {
-    db.prepare(
+    await db.prepare(
       'INSERT INTO points_ledger (member_id,user_id,source,source_id,points,period,note,created_at) '
       + "VALUES (?,NULL,'activation',NULL,?,?,?,?)"
     ).run(memberId, points, per,
@@ -86,23 +86,23 @@ export function recomputeActivationPoints(memberId, per = currentPeriod()) {
 }
 
 /** Raw (uncapped) points earned by a member in a period. */
-export function rawPoints(memberId, per = currentPeriod()) {
-  const row = db.prepare(
+export async function rawPoints(memberId, per = currentPeriod()) {
+  const row = await db.prepare(
     'SELECT COALESCE(SUM(points),0) p FROM points_ledger WHERE member_id = ? AND period = ?'
   ).get(memberId, per);
   return row.p || 0;
 }
 
-export function pointsBreakdown(memberId, per = currentPeriod()) {
-  return db.prepare(
+export async function pointsBreakdown(memberId, per = currentPeriod()) {
+  return await db.prepare(
     'SELECT source, COALESCE(SUM(points),0) points, COUNT(*) entries '
     + 'FROM points_ledger WHERE member_id = ? AND period = ? GROUP BY source'
   ).all(memberId, per);
 }
 
 /** Mandatory tasks that apply to a member for the period. */
-export function mandatoryTasksFor(member, per = currentPeriod()) {
-  return db.prepare(
+export async function mandatoryTasksFor(member, per = currentPeriod()) {
+  return await db.prepare(
     'SELECT * FROM tasks WHERE period = ? AND mandatory = 1 '
     + "AND status = 'open' "
     + "AND (target_level = 'all' OR target_level = ?) "
@@ -112,13 +112,13 @@ export function mandatoryTasksFor(member, per = currentPeriod()) {
   ).all(per, member.level, member.lga, member.ward);
 }
 
-export function taskCompletion(member, per = currentPeriod()) {
-  const tasks = mandatoryTasksFor(member, per);
+export async function taskCompletion(member, per = currentPeriod()) {
+  const tasks = await mandatoryTasksFor(member, per);
   if (!tasks.length) return { required: 0, approved: 0, complete: true, outstanding: [] };
 
   const ids = tasks.map((t) => t.id);
   const placeholders = ids.map(() => '?').join(',');
-  const done = db.prepare(
+  const done = await db.prepare(
     'SELECT task_id FROM submissions WHERE member_id = ? '
     + "AND status = 'approved' AND task_id IN (" + placeholders + ')'
   ).all(member.id, ...ids).map((r) => r.task_id);
@@ -144,14 +144,14 @@ export function taskCompletion(member, per = currentPeriod()) {
  *   3. Downline  - every verified direct downline member has also cleared
  *                  their mandatory tasks.
  */
-export function eligibility(member, per = currentPeriod()) {
-  const counts = downlineCounts(member.id);
-  const own = taskCompletion(member, per);
+export async function eligibility(member, per = currentPeriod()) {
+  const counts = await downlineCounts(member.id);
+  const own = await taskCompletion(member, per);
 
-  const downline = directDownline(member.id, true);
+  const downline = await directDownline(member.id, true);
   const laggards = [];
   for (const d of downline) {
-    const c = taskCompletion(d, per);
+    const c = await taskCompletion(d, per);
     if (!c.complete) {
       laggards.push({
         id: d.id, code: d.code,
@@ -180,7 +180,7 @@ export function eligibility(member, per = currentPeriod()) {
   };
 
   const cap = LEVEL_CAPS[member.level] || LEVEL_CAPS.participant;
-  const raw = rawPoints(member.id, per);
+  const raw = await rawPoints(member.id, per);
   const capped = Math.min(raw, cap.points);
   const eligible = gates.baseline.pass && gates.own_tasks.pass && gates.downline_tasks.pass;
 
@@ -202,10 +202,11 @@ export function eligibility(member, per = currentPeriod()) {
 }
 
 /** Payroll run across a set of members. */
-export function payroll(members, per = currentPeriod()) {
-  const rows = members.map((m) => {
-    const e = eligibility(m, per);
-    return {
+export async function payroll(members, per = currentPeriod()) {
+  const rows = [];
+  for (const m of members) {
+    const e = await eligibility(m, per);
+    rows.push({
       member_id: m.id,
       code: m.code,
       name: m.first_name + ' ' + m.last_name,
@@ -222,8 +223,8 @@ export function payroll(members, per = currentPeriod()) {
       blocked_by: Object.entries(e.gates)
         .filter(([, g]) => !g.pass).map(([k]) => k),
       amount_naira: e.amount_naira,
-    };
-  });
+    });
+  }
 
   const payable = rows.filter((r) => r.eligible);
   return {
@@ -240,12 +241,12 @@ export function payroll(members, per = currentPeriod()) {
 }
 
 /** Award points for an approved task submission. */
-export function awardTaskPoints(submission, task, per = currentPeriod()) {
+export async function awardTaskPoints(submission, task, per = currentPeriod()) {
   const points = task.points || ACTIVITY_POINTS[task.type] || 5;
-  db.prepare(
+  await db.prepare(
     "DELETE FROM points_ledger WHERE source = 'task' AND source_id = ?"
   ).run(submission.id);
-  db.prepare(
+  await db.prepare(
     'INSERT INTO points_ledger (member_id,user_id,source,source_id,points,period,note,created_at) '
     + "VALUES (?,?,'task',?,?,?,?,?)"
   ).run(submission.member_id, submission.user_id || null, submission.id,

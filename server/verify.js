@@ -144,20 +144,20 @@ export function validateFormat(m) {
 }
 
 /** Cross-check the submission against everyone already in the database. */
-export function findDuplicates(m, excludeId = null) {
+export async function findDuplicates(m, excludeId = null) {
   const dupes = [];
-  const scan = (field, value, label) => {
+  const scan = async (field, value, label) => {
     if (!value) return;
-    const rows = db.prepare(
+    const rows = await db.prepare(
       'SELECT id, code, first_name, last_name, lga, ward FROM members '
       + 'WHERE ' + field + ' = ? AND status != \'rejected\' AND id IS NOT ?'
     ).all(value, excludeId);
     for (const r of rows) dupes.push({ field: label, value, match: r });
   };
-  scan('phone', normalisePhone(m.phone), 'Phone number');
-  scan('nin', digits(m.nin) || null, 'NIN');
-  scan('pvc_no', m.pvc_no ? upper(m.pvc_no) : null, 'PVC/VIN');
-  scan('account_number', digits(m.account_number) || null, 'Account number');
+  await scan('phone', normalisePhone(m.phone), 'Phone number');
+  await scan('nin', digits(m.nin) || null, 'NIN');
+  await scan('pvc_no', m.pvc_no ? upper(m.pvc_no) : null, 'PVC/VIN');
+  await scan('account_number', digits(m.account_number) || null, 'Account number');
   return dupes;
 }
 
@@ -168,10 +168,10 @@ export function findDuplicates(m, excludeId = null) {
  * count, otherwise an existing record matches itself and every member in the
  * database looks like a duplicate the moment checks are re-run.
  */
-export function findClustering(m, uplineUserId, excludeId = null) {
+export async function findClustering(m, uplineUserId, excludeId = null) {
   const flags = [];
 
-  const sameName = db.prepare(
+  const sameName = await db.prepare(
     'SELECT COUNT(*) n FROM members WHERE LOWER(last_name) = LOWER(?) '
     + "AND polling_unit = ? AND status != 'rejected' AND id IS NOT ?"
   ).get(m.last_name, m.polling_unit, excludeId).n;
@@ -183,7 +183,7 @@ export function findClustering(m, uplineUserId, excludeId = null) {
 
   const account = digits(m.account_number);
   if (account) {
-    const sameAccount = db.prepare(
+    const sameAccount = await db.prepare(
       "SELECT COUNT(*) n FROM members WHERE account_number = ? "
       + "AND status != 'rejected' AND id IS NOT ?"
     ).get(account, excludeId).n;
@@ -197,7 +197,7 @@ export function findClustering(m, uplineUserId, excludeId = null) {
     // created_at is stored as a JS ISO string ("...T...Z"), which does not sort
     // against SQLite's datetime() format ("... ..."). Compare like for like.
     const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const burst = db.prepare(
+    const burst = await db.prepare(
       'SELECT COUNT(*) n FROM members WHERE upline_user_id = ? '
       + 'AND created_at > ? AND id IS NOT ?'
     ).get(uplineUserId, cutoff, excludeId).n;
@@ -216,7 +216,7 @@ export function findClustering(m, uplineUserId, excludeId = null) {
  * spellings so an extract can be uploaded without being reshaped first.
  * Returns { loaded, skipped }.
  */
-export function loadVoterRoll(rows, batch = null) {
+export async function loadVoterRoll(rows, batch = null) {
   const stamp = new Date().toISOString();
   const tag = batch || 'batch-' + stamp.slice(0, 19);
   const stmt = db.prepare(
@@ -229,12 +229,12 @@ export function loadVoterRoll(rows, batch = null) {
 
   let loaded = 0;
   let skipped = 0;
-  db.exec('BEGIN');
+  await db.exec('BEGIN');
   try {
     for (const r of rows) {
       const vin = upper(r.vin || r.VIN || r.vin_no || r.voter_id);
       if (!vin) { skipped++; continue; }
-      stmt.run(vin,
+      await stmt.run(vin,
         r.last_name || r.surname || null,
         r.first_name || r.firstname || null,
         r.lga || r.local_government || null,
@@ -243,20 +243,20 @@ export function loadVoterRoll(rows, batch = null) {
         stamp, tag);
       loaded++;
     }
-    db.exec('COMMIT');
+    await db.exec('COMMIT');
   } catch (e) {
-    db.exec('ROLLBACK');
+    await db.exec('ROLLBACK');
     throw e;
   }
   return { loaded, skipped };
 }
 
-export const voterRollSize = () =>
-  db.prepare('SELECT COUNT(*) n FROM voter_roll').get().n;
+export const voterRollSize = async () =>
+  (await db.prepare('SELECT COUNT(*) n FROM voter_roll').get()).n;
 
-export function clearVoterRoll() {
-  const n = voterRollSize();
-  db.exec('DELETE FROM voter_roll');
+export async function clearVoterRoll() {
+  const n = await voterRollSize();
+  await db.exec('DELETE FROM voter_roll');
   return n;
 }
 
@@ -267,12 +267,12 @@ export function voterRollBatches() {
   ).all();
 }
 
-export function checkVoterRoll(m) {
-  if (voterRollSize() === 0) {
+export async function checkVoterRoll(m) {
+  if (await voterRollSize() === 0) {
     return { status: 'not_configured',
       reason: 'No INEC register extract loaded. Upload one under Admin > Data sources.' };
   }
-  const hit = db.prepare('SELECT * FROM voter_roll WHERE vin = ?').get(upper(m.pvc_no));
+  const hit = await db.prepare('SELECT * FROM voter_roll WHERE vin = ?').get(upper(m.pvc_no));
   if (!hit) return { status: 'fail', reason: 'VIN not found in the loaded INEC extract' };
 
   const rollPU = String(hit.polling_unit || '').trim().toLowerCase();
@@ -414,7 +414,7 @@ export async function runChecks(m, opts = {}) {
 
   for (const e of fmt.errors) flags.push({ code: 'format', weight: 30, message: e });
 
-  const dupes = findDuplicates(m, excludeId);
+  const dupes = await findDuplicates(m, excludeId);
   checks.duplicates = dupes.length
     ? { status: 'fail', count: dupes.length, matches: dupes }
     : { status: 'pass' };
@@ -424,7 +424,7 @@ export async function runChecks(m, opts = {}) {
              + d.match.last_name + ' (' + d.match.code + ')' });
   }
 
-  for (const f of findClustering(m, uplineUserId, excludeId)) flags.push(f);
+  for (const f of await findClustering(m, uplineUserId, excludeId)) flags.push(f);
 
   const inside = inOyoState(m.lat, m.lng);
   checks.location = m.lat == null
@@ -438,7 +438,7 @@ export async function runChecks(m, opts = {}) {
     flags.push({ code: 'geo_missing', weight: 10, message: 'No GPS captured at registration' });
   }
 
-  checks.voter_roll = checkVoterRoll(m);
+  checks.voter_roll = await checkVoterRoll(m);
   if (checks.voter_roll.status === 'fail' || checks.voter_roll.status === 'mismatch') {
     flags.push({ code: 'voter_roll', weight: 45, message: checks.voter_roll.reason });
   }

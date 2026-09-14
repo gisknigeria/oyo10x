@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -6,13 +6,52 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.OYO_DB || path.join(__dirname, 'data', 'oyo10x.db');
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+if (!process.env.TURSO_DATABASE_URL) fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-export const db = new DatabaseSync(DB_PATH);
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
+const url = process.env.TURSO_DATABASE_URL || `file:${DB_PATH}`;
+const client = createClient({
+  url,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
 
-db.exec(`
+const execute = (sql, args = []) => client.execute({ sql, args });
+const exec = async (sql) => {
+  const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
+  for (const statement of statements) await execute(statement);
+};
+
+export const db = {
+  exec,
+  prepare: (sql) => ({
+    get: async (...args) => {
+      const result = await execute(sql, args);
+      return result.rows[0] || undefined;
+    },
+    all: async (...args) => (await execute(sql, args)).rows,
+    run: async (...args) => {
+      const result = await execute(sql, args);
+      return {
+        changes: Number(result.rowsAffected || 0),
+        lastInsertRowid: result.lastInsertRowid,
+      };
+    },
+  }),
+  transaction: async (fn) => {
+    await execute('BEGIN');
+    try {
+      const result = await fn();
+      await execute('COMMIT');
+      return result;
+    } catch (error) {
+      await execute('ROLLBACK');
+      throw error;
+    }
+  },
+};
+
+await db.exec('PRAGMA foreign_keys = ON');
+
+await db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   username      TEXT NOT NULL UNIQUE,
@@ -157,7 +196,7 @@ for (const [table, column, type] of [
   ['members', 'bank_verified_source', 'TEXT'],
 ]) {
   try {
-    db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type);
+    await db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type);
   } catch { /* column already present */ }
 }
 
@@ -165,8 +204,8 @@ export const nowISO = () => new Date().toISOString();
 export const period = (d = new Date()) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 
-export function audit(userId, actor, action, entity, entityId, detail, ip) {
-  db.prepare(`INSERT INTO audit_log (user_id,actor,action,entity,entity_id,detail,ip,created_at)
+export async function audit(userId, actor, action, entity, entityId, detail, ip) {
+  await db.prepare(`INSERT INTO audit_log (user_id,actor,action,entity,entity_id,detail,ip,created_at)
               VALUES (?,?,?,?,?,?,?,?)`)
     .run(userId ?? null, actor ?? null, action, entity ?? null,
          entityId ?? null, detail ? JSON.stringify(detail) : null, ip ?? null, nowISO());

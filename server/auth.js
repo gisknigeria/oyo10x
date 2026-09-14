@@ -54,11 +54,11 @@ export function referralCode(prefix = 'OYO') {
   return `${prefix}-${s}`;
 }
 
-export function authenticate(req, res, next) {
+export async function authenticate(req, res, next) {
   const header = req.headers.authorization || '';
   const payload = readToken(header.replace(/^Bearer\s+/i, ''));
   if (!payload) return res.status(401).json({ error: 'Not signed in' });
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').get(payload.uid);
   if (!user || user.status !== 'active') return res.status(401).json({ error: 'Account inactive' });
   delete user.password_hash;
   req.user = user;
@@ -78,6 +78,6 @@ export const requireAdmin = (req, res, next) =>
   ADMIN_ROLES.has(req.user.role) ? next()
     : res.status(403).json({ error: 'Administrator access required' });
 
-export function touchLogin(id) {
-  db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(nowISO(), id);
+export async function touchLogin(id) {
+  await db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(nowISO(), id);
 }
