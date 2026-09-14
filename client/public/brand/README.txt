@@ -6,10 +6,13 @@ automatically. No code changes and no rebuild of the source are needed;
 just refresh the browser (or re-run `npm run build` for the production
 bundle).
 
-  candidate.jpg   The candidate photograph from the cover page.
+  candidate.png   The candidate photograph from the cover page.
                   Portrait orientation. Anything from 600x800 upwards
                   looks right; it is displayed with the head and
                   shoulders toward the top of the frame.
+
+  campaign-poster.png
+                  The full campaign poster shown below the login form.
 
   logo.png        The official OYO 10X crest/logo, on a transparent
                   background. Square or near-square.

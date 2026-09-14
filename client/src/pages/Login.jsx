@@ -103,6 +103,12 @@ export default function Login({ onSignIn }) {
               <code>server/data/credentials.csv</code>.
             </div>
           </div>
+
+          <img
+            className="login-poster"
+            src="/brand/campaign-poster.png"
+            alt="OYO 10X campaign poster"
+          />
         </div>
       </main>
     </div>

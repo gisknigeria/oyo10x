@@ -63,7 +63,7 @@ export function Crest({ size = 44, withText = false }) {
 }
 
 /**
- * Candidate portrait. Drop the photograph at client/public/brand/candidate.jpg
+ * Candidate portrait. The supplied PNG is stored at client/public/brand/candidate.png
  * and it appears automatically; until then a labelled placeholder is shown so
  * no layout depends on the file being present.
  */
@@ -77,7 +77,7 @@ export function CandidatePortrait({ className = '' }) {
           <Crest size={52} />
           <div className="portrait-placeholder-text">
             Drop the candidate photograph at
-            <code>client/public/brand/candidate.jpg</code>
+            <code>client/public/brand/candidate.png</code>
           </div>
         </div>
       </div>
@@ -86,7 +86,7 @@ export function CandidatePortrait({ className = '' }) {
 
   return (
     <img
-      src="/brand/candidate.jpg" alt={CAMPAIGN.candidate}
+      src="/brand/candidate.png" alt={CAMPAIGN.candidate}
       className={'portrait ' + className}
       onError={() => setOk(false)}
     />

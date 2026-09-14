@@ -1,8 +1,6 @@
-// Seeds the OYO 10X database:
-//   1. One super administrator.
-//   2. All 51 candidate logins (Gov, Deputy Gov, 3 Senators, 14 Reps, 32 Assembly).
-//   3. A worked demo network across three LGAs so dashboards are not empty.
-//   4. Sample tasks and submissions for the current period.
+// Seeds the OYO 10X database with one administrator by default.
+// Set DEMO_SEED=1 to also create the candidate accounts, field network,
+// sample tasks, and submissions used by the demonstration environment.
 //
 // Every generated password is written to server/data/credentials.csv for
 // distribution. Run with --reset to wipe and rebuild.
@@ -20,6 +18,7 @@ import { recomputeActivationPoints, awardTaskPoints } from './points.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESET = process.argv.includes('--reset');
+const DEMO_SEED = process.env.DEMO_SEED === '1';
 const PER = currentPeriod();
 
 if (RESET) {
@@ -71,6 +70,19 @@ const adminId = await createUser({
   scope_type: 'state',
 });
 console.log('Super administrator created.');
+
+if (!DEMO_SEED) {
+  const csvPath = path.join(__dirname, 'data', 'credentials.csv');
+  const esc = (v) => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v);
+  fs.writeFileSync(csvPath,
+    ['username,password,role,office,full_name,scope']
+      .concat(credentials.map((c) =>
+        [c.username, c.password, c.role, c.office, c.full_name, c.scope].map(esc).join(',')))
+      .join('\n'));
+  console.log('Minimal seed complete: 1 administrator account created.');
+  console.log('  Administrator   admin / oyo10x-admin');
+  process.exit(0);
+}
 
 /* --------------------------- 2. 51 candidates -------------------------- */
 
