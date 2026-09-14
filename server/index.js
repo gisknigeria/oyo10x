@@ -37,9 +37,18 @@ const app = express();
 // plumbing. ALLOWED_ORIGINS optionally locks it down to specific origins
 // (comma-separated, e.g. "https://oyo10x.vercel.app,https://oyo10x.app");
 // left unset, every origin is allowed, which is fine given the auth model.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
-app.use(cors(allowedOrigins.length ? { origin: allowedOrigins } : {}));
+const allowedOrigins = new Set([
+  'https://oyo10x.vercel.app',
+  ...configuredOrigins,
+]);
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS'));
+  },
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
