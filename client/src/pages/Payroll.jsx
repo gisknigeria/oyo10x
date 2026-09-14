@@ -46,8 +46,7 @@ export default function Payroll() {
               progress={data.summary.members
                 ? (data.summary.eligible / data.summary.members) * 100 : 0} />
         <Stat label="Payable this period" value={naira(data.summary.total_naira)}
-              foot={num(data.summary.total_points) + ' verified points × ₦'
-                    + data.naira_per_point} />
+              foot={num(data.summary.total_points) + ' verified points'} />
         <Stat label="Withheld" value={naira(withheld)}
               foot="Points earned but gates not cleared" />
       </div>
