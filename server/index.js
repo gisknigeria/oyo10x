@@ -601,7 +601,7 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
     return res.json({ ok: true, updated: 'status' });
   }
 
-  const title = String(b.title ?? task.title || '').trim();
+  const title = String(b.title ?? task.title ?? '').trim();
   if (!title) return res.status(400).json({ error: 'Task title is required' });
 
   const payload = {
