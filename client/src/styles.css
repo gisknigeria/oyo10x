@@ -306,10 +306,12 @@ a:hover { text-decoration: underline; }
   .mobile-nav-panel .brand-mark {
     font-size: 25px;
     line-height: 1;
+    color: #fff;
   }
   .mobile-nav-panel .brand-sub {
     font-size: 9px;
     letter-spacing: .14em;
+    color: var(--gold-300);
   }
   .mobile-nav-panel .nav {
     padding: 8px 4px 0;
@@ -320,6 +322,7 @@ a:hover { text-decoration: underline; }
     font-size: 10.5px;
     letter-spacing: .14em;
     color: rgba(207, 227, 216, 0.72);
+    font-weight: 700;
   }
   .mobile-nav-panel .nav a {
     padding: 12px 12px;
@@ -328,13 +331,13 @@ a:hover { text-decoration: underline; }
     margin-bottom: 4px;
     color: #ffffff;
     font-weight: 700;
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid transparent;
     letter-spacing: 0.01em;
   }
   .mobile-nav-panel .nav a.active {
-    background: linear-gradient(90deg, rgba(255,255,255,0.18), rgba(255,255,255,0.10));
+    background: linear-gradient(90deg, rgba(27,125,72,0.9), rgba(20,98,56,0.9));
     border-color: rgba(240,217,138,0.38);
-    box-shadow: inset 0 0 0 1px rgba(240,217,138,0.12), 0 8px 18px rgba(0,0,0,0.10);
+    box-shadow: inset 0 0 0 1px rgba(240,217,138,0.10), 0 8px 18px rgba(0,0,0,0.10);
   }
   .mobile-nav-panel .nav a:hover {
     background: rgba(255,255,255,0.08);
@@ -353,9 +356,9 @@ a:hover { text-decoration: underline; }
     border-radius: 12px;
     font-size: 15px;
     font-weight: 800;
-    background: rgba(255,255,255,0.16);
+    background: rgba(255,255,255,0.12);
     color: #fff;
-    border: 1px solid rgba(255,255,255,0.20);
+    border: 1px solid rgba(255,255,255,0.16);
   }
 }
 
