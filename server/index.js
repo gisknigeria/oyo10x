@@ -41,20 +41,24 @@ const app = express();
 // (comma-separated, e.g. "https://oyo10x.vercel.app,https://oyo10x.app");
 // left unset, every origin is allowed, which is fine given the auth model.
 const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
-  .split(',').map((s) => s.trim()).filter(Boolean);
-app.use(cors({
+  .split(',')
+  .map((s) => s.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+const allowedOrigins = new Set(['https://oyo10x.vercel.app', ...configuredOrigins]);
+const corsOptions = {
   origin: (origin, callback) => {
     // No lockdown configured: allow everything, as the auth model above
     // intends. This also covers same-origin requests (single-server deploy,
     // local dev) and Vercel preview URLs, which a fixed allowlist would
     // otherwise reject with a 500 and no way in.
     if (!configuredOrigins.length) return callback(null, true);
-    if (!origin || configuredOrigins.includes(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.has(origin.replace(/\/$/, ''))) return callback(null, true);
     // Reject without throwing: an error here would 500 the whole request
     // instead of just omitting CORS headers.
     callback(null, false);
   },
-}));
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
