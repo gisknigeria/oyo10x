@@ -136,6 +136,12 @@ function canRegisterLevels(user) {
   return [];
 }
 
+function mobiliserPollingUnit(user) {
+  if (user.role !== 'mobiliser' || Number(user.is_coordinator)) return null;
+  const [lga, ward, pollingUnit] = String(user.scope_value || '').split('|');
+  return lga && ward && pollingUnit ? { lga, ward, pollingUnit } : null;
+}
+
 /**
  * The member profile a task submission should be recorded against. Only ever
  * the account's own linked member_id, or an explicit member_id the caller is
@@ -411,6 +417,12 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   if (b.lga && !scopedLgas(req.user).includes(b.lga)) {
     return res.status(403).json({ error: b.lga + ' is outside your constituency' });
   }
+  const ownPollingUnit = mobiliserPollingUnit(req.user);
+  if (ownPollingUnit && (b.lga !== ownPollingUnit.lga
+      || b.ward !== ownPollingUnit.ward
+      || b.polling_unit !== ownPollingUnit.pollingUnit)) {
+    return res.status(403).json({ error: 'Mobilisers can only register people in their own polling unit' });
+  }
 
   const result = await registerMemberRow(b, {
     level, uplineUserId: req.user.id, uplineMemberId: req.user.member_id,
@@ -450,6 +462,14 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
     if (merged.lga && !scopedLgas(req.user).includes(merged.lga)) {
       results.push({ ok: false, status: 403, error: merged.lga + ' is outside your constituency',
         input: row });
+      continue;
+    }
+    const ownPollingUnit = mobiliserPollingUnit(req.user);
+    if (ownPollingUnit && (merged.lga !== ownPollingUnit.lga
+        || merged.ward !== ownPollingUnit.ward
+        || merged.polling_unit !== ownPollingUnit.pollingUnit)) {
+      results.push({ ok: false, status: 403,
+        error: 'Mobilisers can only register people in their own polling unit', input: row });
       continue;
     }
     const r = await registerMemberRow(merged, {

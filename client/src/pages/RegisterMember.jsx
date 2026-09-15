@@ -21,11 +21,11 @@ const BLANK_ROW = { title: '', first_name: '', last_name: '', phone: '', pvc_no:
   bank_name: '', account_number: '', account_name: '' };
 const INITIAL_ROWS = 10;
 
-function BulkRegisterTable({ geo }) {
+function BulkRegisterTable({ geo, lockedLocation }) {
   const [level, setLevel] = useState(geo.levels[0] || '');
-  const [lga, setLga] = useState('');
-  const [ward, setWard] = useState('');
-  const [pollingUnit, setPollingUnit] = useState('');
+  const [lga, setLga] = useState(lockedLocation?.lga || '');
+  const [ward, setWard] = useState(lockedLocation?.ward || '');
+  const [pollingUnit, setPollingUnit] = useState(lockedLocation?.pollingUnit || '');
   const [rows, setRows] = useState(() => Array.from({ length: INITIAL_ROWS }, () => ({ ...BLANK_ROW })));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -33,6 +33,7 @@ function BulkRegisterTable({ geo }) {
 
   const wards = geo.wards[lga] || [];
   const pollingUnits = (geo.polling_units?.[lga]?.[ward]) || [];
+  const locked = !!lockedLocation;
 
   const setRow = (i, patch) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -102,20 +103,20 @@ function BulkRegisterTable({ geo }) {
           </select>
         </Field>
         <Field label="LGA" required>
-          <select value={lga} onChange={(e) => { setLga(e.target.value); setWard(''); setPollingUnit(''); }}>
+          <select value={lga} disabled={locked} onChange={(e) => { setLga(e.target.value); setWard(''); setPollingUnit(''); }}>
             <option value="">Select an LGA</option>
             {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </Field>
         <Field label="Ward" required>
-          <select value={ward} onChange={(e) => { setWard(e.target.value); setPollingUnit(''); }} disabled={!lga}>
+          <select value={ward} disabled={locked || !lga} onChange={(e) => { setWard(e.target.value); setPollingUnit(''); }}>
             <option value="">Select a ward</option>
             {wards.map((w) => <option key={w} value={w}>{w}</option>)}
           </select>
         </Field>
       </div>
       <Field label="Polling unit" required>
-        <select value={pollingUnit} onChange={(e) => setPollingUnit(e.target.value)} disabled={!ward}>
+        <select value={pollingUnit} onChange={(e) => setPollingUnit(e.target.value)} disabled={locked || !ward}>
           <option value="">Select a polling unit</option>
           {pollingUnits.map((u) => <option key={u} value={u}>{u}</option>)}
         </select>
@@ -227,9 +228,12 @@ export default function RegisterMember() {
   useEffect(() => {
     api.get('/geo').then((g) => {
       setGeo(g);
-      setForm((f) => ({ ...f, level: g.levels[0] || '' }));
+      const parts = me.user.role === 'mobiliser' && !me.permissions.is_coordinator
+        ? String(me.user.scope_value || '').split('|') : [];
+      setForm((f) => ({ ...f, level: g.levels[0] || '',
+        ...(parts.length === 3 ? { lga: parts[0], ward: parts[1], polling_unit: parts[2] } : {}) }));
     }).catch((e) => setError(e.message));
-  }, []);
+  }, [me]);
 
   const set = (k) => (e) => {
     const v = e.target.value;
@@ -318,6 +322,10 @@ export default function RegisterMember() {
 
   const wards = geo.wards[form.lga] || [];
   const pollingUnits = (geo.polling_units?.[form.lga]?.[form.ward]) || [];
+  const lockedLocation = me.user.role === 'mobiliser' && !me.permissions.is_coordinator
+    ? (() => { const [lga, ward, pollingUnit] = String(me.user.scope_value || '').split('|');
+      return lga && ward && pollingUnit ? { lga, ward, pollingUnit } : null; })()
+    : null;
   const required = ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit'];
   const ready = required.every((k) => String(form[k] || '').trim());
 
@@ -334,7 +342,7 @@ export default function RegisterMember() {
     return (
       <>
         {modeToggle}
-        <BulkRegisterTable geo={geo} />
+        <BulkRegisterTable geo={geo} lockedLocation={lockedLocation} />
       </>
     );
   }
@@ -421,7 +429,7 @@ export default function RegisterMember() {
             <div className="grid grid-2">
               <Field label="Local Government Area" required
                      hint={geo.lgas.length + ' LGA(s) available to your account'}>
-                <select value={form.lga} onChange={set('lga')}>
+                <select value={form.lga} disabled={!!lockedLocation} onChange={set('lga')}>
                   <option value="">Select an LGA</option>
                   {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
@@ -429,7 +437,7 @@ export default function RegisterMember() {
               <Field label="Ward" required
                      hint={form.lga ? wards.length + ' wards in ' + form.lga
                                     : 'Choose an LGA first'}>
-                <select value={form.ward} onChange={set('ward')} disabled={!form.lga}>
+                <select value={form.ward} onChange={set('ward')} disabled={!!lockedLocation || !form.lga}>
                   <option value="">Select a ward</option>
                   {wards.map((w) => <option key={w} value={w}>{w}</option>)}
                 </select>
@@ -437,7 +445,7 @@ export default function RegisterMember() {
             </div>
             <Field label="Polling unit" required
                    hint={form.ward ? pollingUnits.length + ' polling units in this ward' : 'Choose a ward first'}>
-              <select value={form.polling_unit} onChange={set('polling_unit')} disabled={!form.ward}>
+              <select value={form.polling_unit} onChange={set('polling_unit')} disabled={!!lockedLocation || !form.ward}>
                 <option value="">Select a polling unit</option>
                 {pollingUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
               </select>
