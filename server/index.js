@@ -538,7 +538,7 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   const rows = await db.prepare(
     'SELECT m.*, u.full_name upline_name, u.username upline_username '
     + 'FROM members m LEFT JOIN users u ON u.id = m.upline_user_id '
-    + 'WHERE ' + clause.replace(/\b(status|lga|ward|level|first_name|last_name|phone|code|polling_unit|upline_user_id|upline_member_id)\b/g, 'm.$1')
+    + 'WHERE ' + clause.replace(/\b(id|status|lga|ward|level|first_name|last_name|phone|code|polling_unit|upline_user_id|upline_member_id)\b/g, 'm.$1')
     + ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?'
   ).all(...params, limit, offset);
 
@@ -808,7 +808,7 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
 
 app.get('/api/submissions', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
-  const where = ['(' + scope.sql.replace(/\b(lga|ward|upline_user_id|upline_member_id)\b/g, 'm.$1') + ')'];
+  const where = ['(' + scope.sql.replace(/\b(id|lga|ward|upline_user_id|upline_member_id)\b/g, 'm.$1') + ')'];
   const params = [...scope.params];
   if (req.query.status) { where.push('s.status = ?'); params.push(req.query.status); }
   if (req.query.task_id) { where.push('s.task_id = ?'); params.push(req.query.task_id); }
@@ -923,7 +923,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
 
   const subs = await db.prepare(
     'SELECT s.status, COUNT(*) n FROM submissions s JOIN members m ON m.id = s.member_id '
-    + 'WHERE ' + scope.sql.replace(/\b(lga|ward|upline_user_id|upline_member_id)\b/g, 'm.$1')
+    + 'WHERE ' + scope.sql.replace(/\b(id|lga|ward|upline_user_id|upline_member_id)\b/g, 'm.$1')
     + ' GROUP BY s.status'
   ).all(...p);
 
