@@ -163,13 +163,7 @@ export default function MemberDetail() {
         <div>
           <Card title="Payment eligibility"
                 note={'Period ' + el.period + ' · ' + (LEVEL_LABEL[el.level] || el.level)}>
-            {el.level === 'participant' ? (
-              <Alert type="info">
-                Community Participants are not on the performance payroll. Their
-                verified engagement earns points for the Mobiliser who activated them.
-              </Alert>
-            ) : (
-              <>
+            <>
                 {Object.entries(el.gates).map(([key, g]) => (
                   <div key={key} className={'gate ' + (g.pass ? 'pass' : 'fail')}>
                     <div className={'check-icon ' + (g.pass ? 'pass' : 'fail')}>
@@ -228,8 +222,7 @@ export default function MemberDetail() {
                     )}
                   </div>
                 )}
-              </>
-            )}
+            </>
           </Card>
 
           <div style={{ height: 14 }} />

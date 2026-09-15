@@ -119,7 +119,6 @@ export function timeAgo(iso) {
 
 export const LEVEL_LABEL = {
   mobiliser: 'Mobiliser',
-  participant: 'Participant',
 };
 
 export const ROLE_LABEL = {
@@ -127,5 +126,4 @@ export const ROLE_LABEL = {
   admin: 'Administrator',
   candidate: 'Candidate',
   mobiliser: 'Mobiliser',
-  participant: 'Participant',
 };

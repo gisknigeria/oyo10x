@@ -8,7 +8,7 @@ const TITLES = ['Mr', 'Mrs', 'Miss', 'Dr', 'Engr', 'Chief', 'Alhaji', 'Alhaja', 
 const DESIGNATIONS = [
   'None',
   'Polling Unit Agent', 'Ward Supervisor', 'Community Mobiliser', 'Youth Leader',
-  'Women Leader', 'Community Participant',
+  'Women Leader',
 ];
 
 const BLANK = {

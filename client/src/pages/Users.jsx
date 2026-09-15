@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 
-const ROLES = ['candidate', 'mobiliser', 'admin'];
+const ROLES = ['candidate', 'admin'];
+const EDIT_ROLES = ['candidate', 'admin', 'mobiliser'];
 const SCOPES = [
   { v: 'state', label: 'Whole state (all 33 LGAs)' },
   { v: 'senatorial', label: 'Senatorial district' },
@@ -63,6 +64,9 @@ function NewUser({ geo, onClose, onSaved }) {
     finally { setBusy(false); }
   };
 
+  const ready = u.username.trim() && u.full_name.trim()
+    && (u.role !== 'mobiliser' || (u.phone.trim() && u.scope_value.split('|').every(Boolean)));
+
   if (created) {
     return (
       <Modal title="Login created" onClose={onClose}>
@@ -88,7 +92,7 @@ function NewUser({ geo, onClose, onSaved }) {
     <Modal title="Create a login" onClose={onClose} footer={
       <div className="btn-row">
         <button className="btn" onClick={save}
-                disabled={busy || !u.username.trim() || !u.full_name.trim()}>
+          disabled={busy || !ready}>
           {busy && <span className="spinner" />} Create login
         </button>
         <button className="btn secondary" onClick={onClose}>Cancel</button>
@@ -97,7 +101,8 @@ function NewUser({ geo, onClose, onSaved }) {
       {error && <Alert type="error">{error}</Alert>}
       <Alert type="info">
         A password is generated automatically and shown once. The account
-        holder can share it with their own staff to enter names on their behalf.
+        holder can sign in immediately. Mobiliser accounts are created from
+        the Add network page so they are linked to a member profile.
       </Alert>
 
       <div className="grid grid-2">
@@ -212,7 +217,7 @@ function EditUser({ user, geo, onClose, onSaved }) {
           ...(e.target.value === 'mobiliser' ? { scope_type: 'polling_unit', scope_value: '' } : {}),
           ...(e.target.value !== 'candidate' ? { office: null } : {}),
         }))}>
-          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
+          {EDIT_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r] || r}</option>)}
         </select></Field>
         {u.role === 'candidate' && <Field label="Office"><select value={u.office || ''} onChange={set('office')}>
           {OFFICES.map((o) => <option key={o} value={o}>{o}</option>)}

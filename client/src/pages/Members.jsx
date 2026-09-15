@@ -4,7 +4,7 @@ import { api, downloadCsv, num, timeAgo, LEVEL_LABEL } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert } from '../components/ui.jsx';
 
 const STATUSES = ['', 'pending', 'verified', 'flagged', 'rejected'];
-const LEVELS = ['', 'mobiliser', 'participant'];
+const LEVELS = ['', 'mobiliser'];
 const PAGE = 100;
 
 export default function Members() {

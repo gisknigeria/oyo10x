@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   must_reset    INTEGER NOT NULL DEFAULT 1,
-  role          TEXT NOT NULL,          -- superadmin|admin|candidate|mobiliser|participant
+  role          TEXT NOT NULL,          -- superadmin|admin|candidate|mobiliser
   office        TEXT,                   -- Governor|Deputy Governor|Senator|House of Reps|House of Assembly
   full_name     TEXT NOT NULL,
   phone         TEXT,
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS members (
   lga              TEXT NOT NULL,
   ward             TEXT NOT NULL,
   polling_unit     TEXT NOT NULL,
-  level            TEXT NOT NULL DEFAULT 'participant',
+  level            TEXT NOT NULL DEFAULT 'mobiliser',
   upline_user_id   INTEGER REFERENCES users(id),
   upline_member_id INTEGER REFERENCES members(id),
   lat REAL, lng REAL, accuracy REAL, captured_at TEXT,

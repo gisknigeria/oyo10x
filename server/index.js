@@ -34,7 +34,8 @@ const UPLOAD_DIR = process.env.OYO_UPLOADS || path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
-const VALID_USER_ROLES = new Set(['superadmin', 'admin', 'candidate', 'mobiliser', 'participant']);
+const VALID_USER_ROLES = new Set(['superadmin', 'admin', 'candidate', 'mobiliser']);
+const LOGIN_CREATION_ROLES = new Set(['admin', 'candidate']);
 // Auth here is a Bearer token in localStorage, never a cookie, so there is no
 // CSRF exposure from allowing cross-origin requests -- this is what makes a
 // split deploy (frontend on Vercel, API on Render) safe without extra
@@ -83,7 +84,6 @@ const draftToken = () => crypto.randomBytes(24).toString('base64url');
  * Build a SQL WHERE fragment limiting `members` rows to what this user may see.
  *
  *  - Admin: everyone.
- *  - Participant: only their own record.
  *  - Plain Mobiliser (not a Coordinator): only the people THEY personally
  *    added -- ownership, not geography. Two Mobilisers can share a polling
  *    unit and must never see each other's registrants.
@@ -93,14 +93,10 @@ const draftToken = () => crypto.randomBytes(24).toString('base64url');
 function memberScope(user) {
   if (ADMIN_ROLES.has(user.role)) return { sql: '1=1', params: [] };
 
-  if (user.role === 'participant' && user.member_id) {
-    return { sql: 'id = ?', params: [user.member_id] };
-  }
-
   if (user.role === 'mobiliser' && !Number(user.is_coordinator)) {
     return {
-      sql: '(upline_user_id = ? OR upline_member_id = ?)',
-      params: [user.id, user.member_id || -1],
+      sql: '(id = ? OR upline_user_id = ? OR upline_member_id = ?)',
+      params: [user.member_id || -1, user.id, user.member_id || -1],
     };
   }
 
@@ -130,14 +126,13 @@ function memberScope(user) {
   };
 }
 
-// The network is two field tiers: Mobilisers (added by admin/candidate) and
-// Participants (added by Mobilisers). A Mobiliser promoted to Coordinator
+// The network is a single field tier: Mobilisers added by admin/candidate.
+// A Mobiliser promoted to Coordinator
 // supervises their ward/LGA -- see /api/users/:id/coordinator.
 function canRegisterLevels(user) {
   if (ADMIN_ROLES.has(user.role) || user.role === 'candidate') {
-    return ['mobiliser', 'participant'];
+    return ['mobiliser'];
   }
-  if (user.role === 'mobiliser') return ['participant'];
   return [];
 }
 
@@ -297,7 +292,7 @@ app.post('/api/public/registration/:token', wrap(async (req, res) => {
     return res.status(404).json({ error: 'This registration link is invalid, expired, or already completed' });
   }
   const b = { ...JSON.parse(draft.data_json), ...(req.body || {}) };
-  const level = ['mobiliser', 'participant'].includes(b.level) ? b.level : 'participant';
+  const level = 'mobiliser';
 
   const result = await registerMemberRow(b, { level, uplineUserId: draft.creator_user_id });
   if (!result.ok) return res.status(result.status).json(result);
@@ -331,14 +326,14 @@ const MEMBER_FIELDS = ['first_name', 'last_name', 'phone', 'title', 'designation
  * public self-completion link, so all three behave identically and a fix
  * made once applies everywhere.
  *
- * The auto-created login's role matches the level being registered -- a new
- * Mobiliser gets a mobiliser login (so they can go on to add Participants of
- * their own), a Participant gets a participant login (so they can complete
- * their own tasks). This matters: registering someone as a Mobiliser but
- * handing them a Participant login would leave them unable to add anyone.
+ * The auto-created login is linked to the new Mobiliser member profile so the
+ * account can submit tasks immediately.
  */
 async function registerMemberRow(b, opts) {
-  const { level, uplineUserId, uplineMemberId, force = false, dryRun = false } = opts;
+  const {
+    level, uplineUserId, uplineMemberId, force = false, dryRun = false,
+    loginUsername, loginPassword,
+  } = opts;
 
   for (const f of ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit']) {
     if (!String(b[f] || '').trim()) {
@@ -388,20 +383,20 @@ async function registerMemberRow(b, opts) {
     JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
 
   const id = Number(info.lastInsertRowid);
-  const loginPassword = tempPassword();
-  const loginUsername = 'member.' + id;
-  const loginRole = level === 'mobiliser' ? 'mobiliser' : 'participant';
+  const password = loginPassword || tempPassword();
+  const username = loginUsername || 'member.' + id;
+  const loginRole = 'mobiliser';
   await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
     + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(loginUsername, hashPassword(loginPassword), 1, loginRole,
+  ).run(username, hashPassword(password), 1, loginRole,
     payload.first_name + ' ' + payload.last_name, payload.phone, 'polling_unit',
     payload.lga + '|' + payload.ward + '|' + payload.polling_unit, id, 'active', nowISO());
 
   return {
     ok: true, id, code, name: payload.first_name + ' ' + payload.last_name,
     status: result.riskScore >= 50 ? 'flagged' : 'pending',
-    login: { username: loginUsername, password: loginPassword },
+    login: { username, password },
     risk_score: result.riskScore, flags: result.flags, checks: result.checks,
   };
 }
@@ -979,10 +974,45 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   if (!VALID_USER_ROLES.has(String(b.role).trim())) {
     return res.status(400).json({ error: 'Unsupported user role' });
   }
+  if (!LOGIN_CREATION_ROLES.has(String(b.role).trim())) {
+    return res.status(400).json({ error: 'Mobiliser accounts must be created from Add network' });
+  }
   const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
   if (exists) return res.status(409).json({ error: 'That username is already taken' });
 
   const pw = b.password || tempPassword();
+  if (b.role === 'mobiliser') {
+    const phone = normalisePhone(b.phone);
+    const [lga, ward, pollingUnit] = String(b.scope_value || '').split('|');
+    if (!phone || !lga || !ward || !pollingUnit) {
+      return res.status(400).json({
+        error: 'Mobiliser accounts require phone, LGA, ward and polling unit',
+      });
+    }
+    const nameParts = String(b.full_name).trim().split(/\s+/);
+    const firstName = nameParts.shift();
+    const lastName = nameParts.join(' ') || firstName;
+    const result = await db.transaction(async (tx) => {
+      const member = await tx.prepare(
+        'INSERT INTO members (code,first_name,last_name,phone,designation,lga,ward,polling_unit,level,'
+        + 'upline_user_id,status,checks_json,risk_score,risk_flags,created_at) '
+        + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).run(referralCode('OYO'), firstName, lastName, phone, 'Community Mobiliser',
+        lga, ward, pollingUnit, 'mobiliser', req.user.id, 'pending', '{}', 0, '[]', nowISO());
+      const memberId = Number(member.lastInsertRowid);
+      const user = await tx.prepare(
+        'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
+        + 'scope_type,scope_value,member_id,referral_code,status,created_at) '
+        + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).run(String(b.username).trim().toLowerCase(), hashPassword(pw), 1, 'mobiliser', null,
+        b.full_name.trim(), phone, 'polling_unit', b.scope_value, memberId,
+        referralCode('U'), 'active', nowISO());
+      return { id: Number(user.lastInsertRowid), member_id: memberId };
+    });
+    audit(req.user.id, req.user.username, 'user_created', 'user', result.id,
+      { username: b.username, role: b.role, member_id: result.member_id }, ip(req));
+    return res.status(201).json({ ...result, username: String(b.username).trim().toLowerCase(), password: pw });
+  }
   const info = await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
     + 'scope_type,scope_value,referral_code,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
@@ -1071,6 +1101,11 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   if (!VALID_USER_ROLES.has(String(b.role).trim())) {
     return res.status(400).json({ error: 'Unsupported user role' });
   }
+  const existingUser = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id);
+  if (!existingUser) return res.status(404).json({ error: 'Login not found' });
+  if (b.role === 'mobiliser' && existingUser.role !== 'mobiliser') {
+    return res.status(400).json({ error: 'Mobiliser accounts must be created from Add network' });
+  }
   const office = b.role === 'candidate' ? (b.office || null) : null;
   await db.prepare(
     'UPDATE users SET full_name = ?, phone = ?, role = ?, office = ?, scope_type = ?, scope_value = ? WHERE id = ?'
@@ -1083,7 +1118,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
 
 /**
  * Promote or demote a Mobiliser to Coordinator. A Coordinator is still a
- * Mobiliser -- they can still add Participants -- but their visibility and
+ * Mobiliser -- their visibility and
  * review rights widen from "people I personally added" to "everyone in this
  * ward/LGA without needing a separate registration step.
  */

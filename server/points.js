@@ -6,7 +6,7 @@
 //
 // So activation ALONE never pays. The first 10 verified activations are the
 // baseline requirement worth zero points; beyond that each verified, active
-// participant earns 2 bonus points. All earning is capped monthly by level and
+// verified activity earns bonus points. All earning is capped monthly and
 // is released only when the member and their downline have cleared mandatory
 // tasks for the period.
 
@@ -16,7 +16,6 @@ export const NAIRA_PER_POINT = 100;
 
 export const LEVEL_CAPS = {
   mobiliser:   { points: 100, naira: 10000, label: 'Mobiliser' },
-  participant: { points: 0,   naira: 0,     label: 'Community Participant' },
 };
 
 // Activity point values (programme document, Mobiliser Points table).
@@ -177,7 +176,7 @@ export async function eligibility(member, per = currentPeriod()) {
     },
   };
 
-  const cap = LEVEL_CAPS[member.level] || LEVEL_CAPS.participant;
+  const cap = LEVEL_CAPS[member.level] || LEVEL_CAPS.mobiliser;
   const raw = await rawPoints(member.id, per);
   const capped = Math.min(raw, cap.points);
   const eligible = gates.baseline.pass && gates.own_tasks.pass && gates.downline_tasks.pass;

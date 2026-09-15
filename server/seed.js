@@ -167,10 +167,9 @@ async function makeMember(o) {
   return Number(info.lastInsertRowid);
 }
 
-// Three LGAs with mobilisers and community participants.
+// Three LGAs with mobilisers.
 const DEMO_LGAS = ['Ibadan North', 'Ogbomosho North', 'Iseyin'];
 const demoLogins = [];
-let participantCount = 0;
 
 await db.exec('BEGIN');
 
@@ -198,22 +197,11 @@ for (const lga of DEMO_LGAS) {
       demoLogins.push('mob.' + slug(lga));
     }
 
-    const n = 9 + crypto.randomInt(5);
-    for (let i = 0; i < n; i++) {
-      await makeMember({
-        lga, ward, polling_unit: mob.polling_unit,
-        level: 'participant', designation: 'Community Participant',
-        upline_user_id: mobUserId || null, upline_member_id: mobMemberId,
-        status: crypto.randomInt(100) < 6 ? 'pending' : 'verified',
-      });
-      participantCount++;
-    }
   }
 }
 
 await db.exec('COMMIT');
-console.log('Demo network built across ' + DEMO_LGAS.join(', ')
-  + ' (' + participantCount + ' community participants).');
+console.log('Demo network built across ' + DEMO_LGAS.join(', ') + '.');
 
 /* ---------------------------- 4. tasks & work --------------------------- */
 
@@ -308,7 +296,7 @@ for (const m of pendingPool) {
 }
 
 for (const m of everyone) {
-  if (m.level !== 'participant') recomputeActivationPoints(m.id, PER);
+  recomputeActivationPoints(m.id, PER);
 }
 
 await db.exec('COMMIT');

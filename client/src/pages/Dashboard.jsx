@@ -132,8 +132,6 @@ function CandidateDashboard({ data, me }) {
         <Card title="Your network" note="People currently registered under you, by role">
           <Bar label="Mobilisers" value={levels.mobiliser || 0} max={Math.max(levels.mobiliser || 0, 10)}
                display={num(levels.mobiliser || 0)} />
-          <Bar label="Participants" value={levels.participant || 0} max={Math.max(levels.participant || 0, 10)}
-               display={num(levels.participant || 0)} />
         </Card>
         <Card title="Next actions" note="Keep the network moving">
           <div className="btn-row" style={{ marginBottom: 12 }}>
@@ -142,7 +140,7 @@ function CandidateDashboard({ data, me }) {
           </div>
           <Alert type="info">
             {pendingReview ? 'Review pending submissions so approved work can release points.'
-              : 'Keep registering leaders and participants across your assigned area.'}
+              : 'Keep registering mobilisers across your assigned area.'}
           </Alert>
         </Card>
       </div>
@@ -319,8 +317,6 @@ export default function Dashboard() {
               note="Each level activates at least 10 people at the level below">
           <Bar label="Mobilisers" value={levelMap.mobiliser || 0} max={3510}
                display={num(levelMap.mobiliser || 0) + ' / 3,510'} />
-          <Bar label="Participants" value={levelMap.participant || 0} max={35100}
-               display={num(levelMap.participant || 0) + ' / 35,100'} />
         </Card>
 
         <Card title="Verification">

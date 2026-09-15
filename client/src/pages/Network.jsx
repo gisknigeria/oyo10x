@@ -18,11 +18,9 @@ function Node({ node, baseline, depth }) {
         <Status value={node.status} />
         <span className="tree-meta">{node.ward} · {node.polling_unit}</span>
         <span className="spacer" style={{ flex: 1 }} />
-        {node.level !== 'participant' && (
-          <span className={'badge ' + (node.meets_baseline ? 'green' : 'amber')}>
-            {node.verified_downline} / {baseline} activated
-          </span>
-        )}
+        <span className={'badge ' + (node.meets_baseline ? 'green' : 'amber')}>
+          {node.verified_downline} / {baseline} activated
+        </span>
       </div>
 
       {open && node.children.map((c) => (
@@ -61,8 +59,8 @@ export default function Network() {
   data.roots.forEach(walk);
 
   const byLevel = flat.reduce((a, n) => { a[n.level] = (a[n.level] || 0) + 1; return a; }, {});
-  const meeting = flat.filter((n) => n.level !== 'participant' && n.meets_baseline).length;
-  const fieldAgents = flat.filter((n) => n.level !== 'participant').length;
+  const meeting = flat.filter((n) => n.meets_baseline).length;
+  const fieldAgents = flat.length;
 
   return (
     <>
@@ -76,7 +74,6 @@ export default function Network() {
         <Stat label="People in view" value={num(flat.length)}
               foot="Across up to four levels" accent />
         <Stat label="Mobilisers" value={num(byLevel.mobiliser || 0)} />
-        <Stat label="Participants" value={num(byLevel.participant || 0)} />
       </div>
 
       <Alert type="info">
