@@ -944,7 +944,7 @@ app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   res.json({ rows });
 }));
 
-app.delete('/api/users/:id', authenticate, requireRole('admin'), wrap(async (req, res) => {
+app.delete('/api/users/:id', authenticate, requireRole('admin', 'superadmin'), wrap(async (req, res) => {
   const userId = Number(req.params.id);
   const target = await db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(userId);
   if (!target) return res.status(404).json({ error: 'Login not found' });
