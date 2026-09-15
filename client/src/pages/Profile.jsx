@@ -6,7 +6,7 @@ import { useAuth } from '../App.jsx';
 export default function Profile() {
   const { me, reload } = useAuth();
   const [profile, setProfile] = useState({
-    full_name: me.user.full_name || '', phone: me.user.phone || '',
+    username: me.user.username || '', phone: me.user.phone || '',
   });
   const [passwords, setPasswords] = useState({ current_password: '', new_password: '', confirm: '' });
   const [message, setMessage] = useState('');
@@ -36,19 +36,19 @@ export default function Profile() {
 
   return (
     <div className="grid grid-2">
-      <Card title="Profile" note="Update your contact details. Role and access are managed by an administrator.">
+      <Card title="Profile" note="Update your username and contact details. Your name and role are managed by an administrator.">
         {message && <Alert type="success">{message}</Alert>}
         {error && <Alert type="error">{error}</Alert>}
         <form onSubmit={saveProfile}>
-          <Field label="Username"><input value={me.user.username} disabled /></Field>
+          <Field label="Full name"><input value={me.user.full_name} disabled /></Field>
           <Field label="Role"><input value={me.user.office || me.user.role} disabled /></Field>
-          <Field label="Full name" required>
-            <input value={profile.full_name} onChange={(e) => setProfile({ ...profile, full_name: e.target.value })} />
+          <Field label="Username" required hint="Lowercase letters, numbers, dots, hyphens and underscores">
+            <input value={profile.username} onChange={(e) => setProfile({ ...profile, username: e.target.value })} />
           </Field>
           <Field label="Phone number">
             <input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} />
           </Field>
-          <button className="btn" disabled={busy || !profile.full_name.trim()}>Save profile</button>
+          <button className="btn" disabled={busy || !profile.username.trim()}>Save profile</button>
         </form>
       </Card>
 

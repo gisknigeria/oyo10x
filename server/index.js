@@ -232,13 +232,20 @@ app.post('/api/auth/change-password', authenticate, wrap(async (req, res) => {
 }));
 
 app.patch('/api/auth/profile', authenticate, wrap(async (req, res) => {
-  const fullName = String(req.body?.full_name || '').trim();
+  const username = String(req.body?.username || '').trim().toLowerCase();
   const phone = String(req.body?.phone || '').trim() || null;
-  if (!fullName) return res.status(400).json({ error: 'Full name is required' });
-  await db.prepare('UPDATE users SET full_name = ?, phone = ? WHERE id = ?')
-    .run(fullName, phone, req.user.id);
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+  if (!/^[a-z0-9._-]+$/.test(username)) {
+    return res.status(400).json({ error: 'Username may use lowercase letters, numbers, dots, hyphens and underscores' });
+  }
+  const existing = await db.prepare(
+    'SELECT id FROM users WHERE LOWER(username) = ? AND id <> ?'
+  ).get(username, req.user.id);
+  if (existing) return res.status(409).json({ error: 'That username is already taken' });
+  await db.prepare('UPDATE users SET username = ?, phone = ? WHERE id = ?')
+    .run(username, phone, req.user.id);
   await audit(req.user.id, req.user.username, 'profile_updated', 'user', req.user.id, null, ip(req));
-  res.json({ ok: true, user: { ...req.user, full_name: fullName, phone } });
+  res.json({ ok: true, user: { ...req.user, username, phone } });
 }));
 
 /* ----------------------------- reference data ---------------------------- */
