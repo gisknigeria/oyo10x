@@ -72,12 +72,11 @@ export default function Network() {
         </div>
       )}
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid grid-3" style={{ marginBottom: 16 }}>
         <Stat label="People in view" value={num(flat.length)}
               foot="Across up to four levels" accent />
-        <Stat label="Ambassadors" value={num(byLevel.ambassador || 0)} />
-        <Stat label="Champions" value={num(byLevel.champion || 0)} />
         <Stat label="Mobilisers" value={num(byLevel.mobiliser || 0)} />
+        <Stat label="Participants" value={num(byLevel.participant || 0)} />
       </div>
 
       <Alert type="info">

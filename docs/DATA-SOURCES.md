@@ -213,5 +213,4 @@ already enforced in `server/points.js`.
 3. **Week 2:** obtain the INEC register extract for your wards and load it. This
    is what answers "is this person actually in this polling unit".
 4. **When budget allows:** add a NIN provider for identity confirmation on
-   Ambassadors and Champions at minimum, since they control the money flow below
-   them.
+   mobilisers, since they control the local field activity.

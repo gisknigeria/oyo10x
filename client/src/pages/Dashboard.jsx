@@ -5,7 +5,7 @@ import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui
 import { useAuth } from '../App.jsx';
 import Verification from './Verification.jsx';
 
-const FIELD_ROLES = new Set(['ambassador', 'champion', 'mobiliser']);
+const FIELD_ROLES = new Set(['mobiliser']);
 
 function DashboardHeading({ title, note }) {
   return (
@@ -158,15 +158,9 @@ function FieldDashboard({ data, me }) {
   const { totals, coverage, by_level, recent, tasks } = data;
   const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const nextLevel = me.permissions.can_register_levels[0];
-  const areaLabel = me.user.role === 'ambassador' ? 'Wards reached'
-    : me.user.role === 'champion' ? 'Polling units reached' : 'Assigned polling unit';
-  const areaValue = me.user.role === 'ambassador' ? coverage.wards
-    : me.user.role === 'champion' ? coverage.units : (coverage.units || 0);
-  const areaFoot = me.user.role === 'ambassador'
-    ? coverage.units + ' polling units active'
-    : me.user.role === 'champion'
-      ? coverage.wards + ' wards represented'
-      : num(totals.verified) + ' verified registrations';
+  const areaLabel = 'Assigned polling unit';
+  const areaValue = coverage.units || 0;
+  const areaFoot = num(totals.verified) + ' verified registrations';
 
   return (
     <>
@@ -323,10 +317,6 @@ export default function Dashboard() {
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="10X network structure"
               note="Each level activates at least 10 people at the level below">
-          <Bar label="Ambassadors" value={levelMap.ambassador || 0} max={33}
-               display={(levelMap.ambassador || 0) + ' / 33'} />
-          <Bar label="Champions" value={levelMap.champion || 0} max={351}
-               display={(levelMap.champion || 0) + ' / 351'} />
           <Bar label="Mobilisers" value={levelMap.mobiliser || 0} max={3510}
                display={num(levelMap.mobiliser || 0) + ' / 3,510'} />
           <Bar label="Participants" value={levelMap.participant || 0} max={35100}

@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS users (
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   must_reset    INTEGER NOT NULL DEFAULT 1,
-  role          TEXT NOT NULL,          -- superadmin|admin|candidate|ambassador|champion|mobiliser
+  role          TEXT NOT NULL,          -- superadmin|admin|candidate|mobiliser|participant
   office        TEXT,                   -- Governor|Deputy Governor|Senator|House of Reps|House of Assembly
   full_name     TEXT NOT NULL,
   phone         TEXT,
@@ -206,7 +206,7 @@ for (const [table, column, type] of [
   ['members', 'bank_verified_source', 'TEXT'],
   // A coordinator is a mobiliser promoted by admin to oversee a ward/LGA
   // (everyone in that area, not just people they personally added) rather
-  // than a separate registration tier like the old Ambassador/Champion.
+  // than a separate registration tier.
   ['users', 'is_coordinator', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   try {

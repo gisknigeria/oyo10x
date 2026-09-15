@@ -404,6 +404,14 @@ export default function Users() {
     } catch (e) { setError(e.message); }
   };
 
+  const removeAccount = async (u) => {
+    if (!window.confirm('Permanently delete the ' + u.username + ' account? This cannot be undone.')) return;
+    try {
+      await api.delete('/users/' + u.id);
+      load();
+    } catch (e) { setError(e.message); }
+  };
+
   const removeCoordinator = async (u) => {
     try { await api.post('/users/' + u.id + '/coordinator', { is_coordinator: false }); load(); }
     catch (e) { setError(e.message); }
@@ -530,9 +538,14 @@ export default function Users() {
                           Reset password
                         </button>
                         {u.role !== 'superadmin' && (
-                          <button className="btn sm secondary" onClick={() => toggle(u)}>
-                            {u.status === 'active' ? 'Suspend' : 'Restore'}
-                          </button>
+                          <>
+                            <button className="btn sm secondary" onClick={() => toggle(u)}>
+                              {u.status === 'active' ? 'Suspend' : 'Restore'}
+                            </button>
+                            <button className="btn sm danger" onClick={() => removeAccount(u)}>
+                              Delete account
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>

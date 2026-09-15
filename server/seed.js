@@ -167,8 +167,7 @@ async function makeMember(o) {
   return Number(info.lastInsertRowid);
 }
 
-// Three LGAs at full 10X fan-out: 1 Ambassador -> ~10 Champions ->
-// ~10 Mobilisers each -> ~10 Community Participants each.
+// Three LGAs with mobilisers and community participants.
 const DEMO_LGAS = ['Ibadan North', 'Ogbomosho North', 'Iseyin'];
 const demoLogins = [];
 let participantCount = 0;
@@ -178,71 +177,36 @@ await db.exec('BEGIN');
 for (const lga of DEMO_LGAS) {
   const wards = WARDS[lga];
 
-  const ambMemberId = await makeMember({
-    lga, ward: wards[0], polling_unit: wards[0] + ' / PU 001',
-    level: 'ambassador', designation: 'LGA Ambassador', upline_user_id: adminId,
-  });
-  const amb = await db.prepare('SELECT * FROM members WHERE id = ?').get(ambMemberId);
-  const ambUserId = await createUser({
-    username: 'amb.' + slug(lga), role: 'ambassador',
-    full_name: amb.first_name + ' ' + amb.last_name, phone: amb.phone,
-    scope_type: 'lga', scope_value: lga, member_id: ambMemberId,
-  });
-  demoLogins.push('amb.' + slug(lga));
-
-  // 10 to 12 Champions, so some Ambassadors clear the baseline and some do not.
-  const champCount = 10 + crypto.randomInt(3);
-  for (let c = 0; c < champCount; c++) {
-    const ward = wards[c % wards.length];
-    const champMemberId = await makeMember({
-      lga, ward, polling_unit: ward + ' / PU ' + String(c + 1).padStart(3, '0'),
-      level: 'champion', designation: 'Ward Champion',
-      upline_user_id: ambUserId, upline_member_id: ambMemberId,
+  const mobCount = 10 + crypto.randomInt(3);
+  for (let mo = 0; mo < mobCount; mo++) {
+    const ward = wards[mo % wards.length];
+    const mobMemberId = await makeMember({
+      lga, ward, polling_unit: ward + ' / PU ' + String(100 + mo).padStart(3, '0'),
+      level: 'mobiliser', designation: 'Polling Unit Mobiliser',
+      upline_user_id: adminId,
     });
-    const champ = await db.prepare('SELECT * FROM members WHERE id = ?').get(champMemberId);
+    const mob = await db.prepare('SELECT * FROM members WHERE id = ?').get(mobMemberId);
 
-    let champUserId = null;
-    if (c === 0) {
-      champUserId = await createUser({
-        username: 'champ.' + slug(lga), role: 'champion',
-        full_name: champ.first_name + ' ' + champ.last_name, phone: champ.phone,
-        scope_type: 'ward', scope_value: ward, member_id: champMemberId,
+    let mobUserId = null;
+    if (mo === 0) {
+      mobUserId = await createUser({
+        username: 'mob.' + slug(lga), role: 'mobiliser',
+        full_name: mob.first_name + ' ' + mob.last_name, phone: mob.phone,
+        scope_type: 'polling_unit', scope_value: lga + '|' + ward + '|' + mob.polling_unit,
+        member_id: mobMemberId,
       });
-      demoLogins.push('champ.' + slug(lga));
+      demoLogins.push('mob.' + slug(lga));
     }
 
-    const mobCount = 9 + crypto.randomInt(4);
-    for (let mo = 0; mo < mobCount; mo++) {
-      const mobMemberId = await makeMember({
-        lga, ward, polling_unit: ward + ' / PU ' + String(100 + mo).padStart(3, '0'),
-        level: 'mobiliser', designation: 'Polling Unit Mobiliser',
-        upline_user_id: champUserId || ambUserId, upline_member_id: champMemberId,
+    const n = 9 + crypto.randomInt(5);
+    for (let i = 0; i < n; i++) {
+      await makeMember({
+        lga, ward, polling_unit: mob.polling_unit,
+        level: 'participant', designation: 'Community Participant',
+        upline_user_id: mobUserId || null, upline_member_id: mobMemberId,
+        status: crypto.randomInt(100) < 6 ? 'pending' : 'verified',
       });
-      const mob = await db.prepare('SELECT * FROM members WHERE id = ?').get(mobMemberId);
-
-      let mobUserId = null;
-      if (c === 0 && mo === 0) {
-        mobUserId = await createUser({
-          username: 'mob.' + slug(lga), role: 'mobiliser',
-          full_name: mob.first_name + ' ' + mob.last_name, phone: mob.phone,
-          scope_type: 'pu', scope_value: mob.polling_unit, member_id: mobMemberId,
-        });
-        demoLogins.push('mob.' + slug(lga));
-      }
-
-      // Baseline is 10. Vary 9-13 so the dashboard shows both members who miss
-      // the baseline and members earning bonus points above it.
-      const n = 9 + crypto.randomInt(5);
-      for (let i = 0; i < n; i++) {
-        await makeMember({
-          lga, ward, polling_unit: mob.polling_unit,
-          level: 'participant', designation: 'Community Participant',
-          upline_user_id: mobUserId || champUserId || ambUserId,
-          upline_member_id: mobMemberId,
-          status: crypto.randomInt(100) < 6 ? 'pending' : 'verified',
-        });
-        participantCount++;
-      }
+      participantCount++;
     }
   }
 }
@@ -277,12 +241,9 @@ const TASKS = [
   { title: 'Household canvass: 10 doors', type: 'canvass', points: 5,
     level: 'mobiliser',
     desc: 'Visit ten households in your polling unit and log the conversation outcome.' },
-  { title: 'Ward coordination report', type: 'issue_report', points: 10,
-    level: 'champion',
-    desc: 'Report one verified infrastructure or service problem in your ward.' },
-  { title: 'LGA performance review meeting', type: 'meeting', points: 10,
-    level: 'ambassador',
-    desc: 'Convene the monthly LGA review with your Champions and log attendance.' },
+  { title: 'Local issue report', type: 'issue_report', points: 10,
+    level: 'mobiliser',
+    desc: 'Report one verified infrastructure or service problem in your area.' },
   { title: 'Support a community meeting', type: 'meeting', points: 10,
     level: 'all', mandatory: 0,
     desc: 'Optional. Convene or support a community meeting in your ward.' },

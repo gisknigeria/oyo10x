@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { db, nowISO, period as currentPeriod, audit } from './db.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
-  requireAdmin, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
+  requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
 } from './auth.js';
 import {
   LGAS, WARDS, POLLING_UNITS, SENATORIAL, FEDERAL, STATE_CONST, BANKS,
@@ -34,6 +34,7 @@ const UPLOAD_DIR = process.env.OYO_UPLOADS || path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
+const VALID_USER_ROLES = new Set(['superadmin', 'admin', 'candidate', 'mobiliser', 'participant']);
 // Auth here is a Bearer token in localStorage, never a cookie, so there is no
 // CSRF exposure from allowing cross-origin requests -- this is what makes a
 // split deploy (frontend on Vercel, API on Render) safe without extra
@@ -129,13 +130,9 @@ function memberScope(user) {
   };
 }
 
-// The network is two field tiers now: Mobilisers (added by admin/candidate)
-// and Participants (added by Mobilisers). Ambassador/Champion were a separate
-// registration tier; they are kept in the schema and in LEVEL_LABEL only so
-// existing historical records keep displaying correctly, but nothing can
-// register a person into those levels going forward. A Mobiliser promoted to
-// Coordinator (users.is_coordinator) supervises their ward/LGA instead of
-// needing a separate tier -- see /api/users/:id/coordinator.
+// The network is two field tiers: Mobilisers (added by admin/candidate) and
+// Participants (added by Mobilisers). A Mobiliser promoted to Coordinator
+// supervises their ward/LGA -- see /api/users/:id/coordinator.
 function canRegisterLevels(user) {
   if (ADMIN_ROLES.has(user.role) || user.role === 'candidate') {
     return ['mobiliser', 'participant'];
@@ -490,11 +487,8 @@ app.post('/api/members/:id/login', authenticate, wrap(async (req, res) => {
   const password = tempPassword();
   const username = 'member.' + member.id;
   const role = member.level;
-  const scopeType = role === 'ambassador' ? 'lga'
-    : role === 'champion' ? 'ward' : 'polling_unit';
-  const scopeValue = role === 'ambassador' ? member.lga
-    : role === 'champion' ? member.ward
-    : member.lga + '|' + member.ward + '|' + member.polling_unit;
+  const scopeType = 'polling_unit';
+  const scopeValue = member.lga + '|' + member.ward + '|' + member.polling_unit;
 
   await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
@@ -847,10 +841,10 @@ app.post('/api/submissions/:id/review', authenticate, wrap(async (req, res) => {
 app.get('/api/payroll', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
   const scope = memberScope(req.user);
-  const levels = ['ambassador', 'champion', 'mobiliser'];
+  const levels = ['mobiliser'];
   const rows = await db.prepare(
     'SELECT * FROM members WHERE (' + scope.sql + ') '
-    + "AND status = 'verified' AND level IN ('ambassador','champion','mobiliser') "
+    + "AND status = 'verified' AND level = 'mobiliser' "
     + 'ORDER BY lga, ward'
   ).all(...scope.params);
   const result = await payroll(rows, per);
@@ -950,10 +944,45 @@ app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   res.json({ rows });
 }));
 
+app.delete('/api/users/:id', authenticate, requireRole('admin'), wrap(async (req, res) => {
+  const userId = Number(req.params.id);
+  const target = await db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(userId);
+  if (!target) return res.status(404).json({ error: 'Login not found' });
+  if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+  if (target.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super administrator accounts cannot be deleted' });
+  }
+
+  await db.exec('BEGIN');
+  try {
+    await db.prepare('UPDATE users SET upline_id = NULL WHERE upline_id = ?').run(userId);
+    await db.prepare('UPDATE members SET upline_user_id = NULL, reviewed_by = NULL WHERE upline_user_id = ? OR reviewed_by = ?')
+      .run(userId, userId);
+    await db.prepare('UPDATE submissions SET user_id = NULL, reviewed_by = NULL WHERE user_id = ? OR reviewed_by = ?')
+      .run(userId, userId);
+    await db.prepare('UPDATE tasks SET created_by = NULL WHERE created_by = ?').run(userId);
+    await db.prepare('UPDATE points_ledger SET user_id = NULL WHERE user_id = ?').run(userId);
+    await db.prepare('UPDATE audit_log SET user_id = NULL WHERE user_id = ?').run(userId);
+    await db.prepare('DELETE FROM registration_drafts WHERE creator_user_id = ?').run(userId);
+    await db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    await db.exec('COMMIT');
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+
+  audit(req.user.id, req.user.username, 'user_deleted', 'user', userId,
+    { username: target.username, role: target.role }, ip(req));
+  res.json({ ok: true });
+}));
+
 app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   const b = req.body || {};
   for (const f of ['username', 'full_name', 'role']) {
     if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
+  }
+  if (!VALID_USER_ROLES.has(String(b.role).trim())) {
+    return res.status(400).json({ error: 'Unsupported user role' });
   }
   const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
   if (exists) return res.status(409).json({ error: 'That username is already taken' });
@@ -1044,6 +1073,9 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   for (const f of ['full_name', 'role', 'scope_type']) {
     if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
   }
+  if (!VALID_USER_ROLES.has(String(b.role).trim())) {
+    return res.status(400).json({ error: 'Unsupported user role' });
+  }
   const office = b.role === 'candidate' ? (b.office || null) : null;
   await db.prepare(
     'UPDATE users SET full_name = ?, phone = ?, role = ?, office = ?, scope_type = ?, scope_value = ? WHERE id = ?'
@@ -1058,8 +1090,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
  * Promote or demote a Mobiliser to Coordinator. A Coordinator is still a
  * Mobiliser -- they can still add Participants -- but their visibility and
  * review rights widen from "people I personally added" to "everyone in this
- * ward/LGA", replacing what the old Ambassador/Champion tiers did, without
- * needing a separate registration step.
+ * ward/LGA without needing a separate registration step.
  */
 app.post('/api/users/:id/coordinator', authenticate, requireAdmin, wrap(async (req, res) => {
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -1365,7 +1396,7 @@ app.get('/api/export/payroll.csv', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
   const members = await db.prepare(
     'SELECT * FROM members WHERE (' + scope.sql + ") AND status = 'verified' "
-    + "AND level IN ('ambassador','champion','mobiliser')"
+    + "AND level = 'mobiliser'"
   ).all(...scope.params);
   const { rows } = await payroll(members, per);
   const cols = ['code', 'name', 'level', 'lga', 'ward', 'verified_downline',

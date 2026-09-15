@@ -40,7 +40,7 @@ export default function Payroll() {
     <>
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="On the payroll" value={num(data.summary.members)}
-              foot="Verified Ambassadors, Champions and Mobilisers" />
+              foot="Verified mobilisers" />
         <Stat label="Eligible for payment" value={num(data.summary.eligible)} accent
               foot={num(data.summary.blocked) + ' blocked by an unmet gate'}
               progress={data.summary.members
@@ -56,9 +56,8 @@ export default function Payroll() {
         <strong>10 verified activations</strong>, all of their own{' '}
         <strong>mandatory tasks approved</strong>, and every one of their verified
         downline members has <strong>cleared their tasks too</strong>. Points are
-        then capped by level — Mobiliser {data.caps.mobiliser.points}, Champion{' '}
-        {data.caps.champion.points}, Ambassador {data.caps.ambassador.points} points
-        per month. Unearned points are never paid.
+        then capped at {data.caps.mobiliser.points} points per month for mobilisers.
+        Unearned points are never paid.
       </Alert>
 
       <div className="toolbar">

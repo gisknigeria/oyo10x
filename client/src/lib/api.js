@@ -51,6 +51,7 @@ export const api = {
   get: (p) => request(p),
   post: (p, body) => request(p, { method: 'POST', body }),
   patch: (p, body) => request(p, { method: 'PATCH', body }),
+  delete: (p) => request(p, { method: 'DELETE' }),
   form: (p, formData) => request(p, { method: 'POST', body: formData }),
 };
 
@@ -117,8 +118,6 @@ export function timeAgo(iso) {
 }
 
 export const LEVEL_LABEL = {
-  ambassador: 'Ambassador',
-  champion: 'Champion',
   mobiliser: 'Mobiliser',
   participant: 'Participant',
 };
@@ -127,8 +126,6 @@ export const ROLE_LABEL = {
   superadmin: 'Super Administrator',
   admin: 'Administrator',
   candidate: 'Candidate',
-  ambassador: 'Ambassador',
-  champion: 'Ward Champion',
   mobiliser: 'Mobiliser',
   participant: 'Participant',
 };

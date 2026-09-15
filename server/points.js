@@ -15,8 +15,6 @@ import { db, period as currentPeriod, nowISO } from './db.js';
 export const NAIRA_PER_POINT = 100;
 
 export const LEVEL_CAPS = {
-  ambassador:  { points: 500, naira: 50000, label: 'Ambassador' },
-  champion:    { points: 250, naira: 25000, label: 'Champion' },
   mobiliser:   { points: 100, naira: 10000, label: 'Mobiliser' },
   participant: { points: 0,   naira: 0,     label: 'Community Participant' },
 };
