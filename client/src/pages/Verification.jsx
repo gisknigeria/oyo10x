@@ -210,9 +210,8 @@ export default function Verification({ compact = false }) {
             <Alert type="info" title="Getting bank names without a key. ">
               When you actually pay people, your bank's payment-confirmation file
               lists the <strong>real beneficiary name</strong> for every account it
-              paid. Upload that file under Data sources and the platform confirms
-              names from the bank itself — the same answer a paid API gives, for
-              nothing.
+              paid. An administrator can use that file to confirm names from the
+              bank itself — the same answer a paid API gives, for nothing.
             </Alert>
           </div>
         </div>

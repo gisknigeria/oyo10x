@@ -13,7 +13,6 @@ import Network from './pages/Network.jsx';
 import Tasks from './pages/Tasks.jsx';
 import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
-import AdminData from './pages/AdminData.jsx';
 import PublicRegistration from './pages/PublicRegistration.jsx';
 import Profile from './pages/Profile.jsx';
 
@@ -32,7 +31,6 @@ const NAV = [
   { to: '/payroll', label: 'Points & payment', icon: '₦' },
   { group: 'Administration', admin: true },
   { to: '/users', label: 'Logins', icon: '⚿', admin: true },
-  { to: '/admin/data', label: 'Data sources', icon: '⚙', admin: true },
 ];
 
 function Shell({ children }) {
@@ -200,7 +198,6 @@ export default function App() {
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/payroll" element={<Payroll />} />
           {isAdmin && <Route path="/users" element={<Users />} />}
-          {isAdmin && <Route path="/admin/data" element={<AdminData />} />}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

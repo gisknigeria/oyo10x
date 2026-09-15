@@ -230,14 +230,44 @@ function RecentRegistrations({ rows }) {
   );
 }
 
+function RecentActivity({ rows }) {
+  return (
+    <Card title="Recent activity" note="Last 200 audited actions" bodyClass="">
+      {!rows || rows.length === 0 ? <Empty title="No activity yet" /> : (
+        <div className="table-wrap" style={{ maxHeight: 380, overflowY: 'auto' }}>
+          <table>
+            <thead>
+              <tr><th>Action</th><th>By</th><th>Entity</th><th>When</th></tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 80).map((a) => (
+                <tr key={a.id}>
+                  <td style={{ fontWeight: 600 }}>{a.action.replace(/_/g, ' ')}</td>
+                  <td className="mono">{a.actor || '--'}</td>
+                  <td className="muted">
+                    {a.entity ? a.entity + ' #' + a.entity_id : '--'}
+                  </td>
+                  <td className="muted nowrap">{timeAgo(a.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { me } = useAuth();
   const [data, setData] = useState(null);
+  const [activity, setActivity] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     api.get('/dashboard').then(setData).catch((e) => setError(e.message));
-  }, []);
+    if (me.permissions.is_admin) api.get('/admin/audit').then((d) => setActivity(d.rows));
+  }, [me.permissions.is_admin]);
 
   if (error) return <Alert type="error">{error}</Alert>;
   if (!data) return <Loading label="Loading programme data" />;
@@ -402,6 +432,10 @@ export default function Dashboard() {
           </div>
         )}
       </Card>
+
+      <div style={{ marginTop: 16 }}>
+        <RecentActivity rows={activity} />
+      </div>
     </>
   );
 }

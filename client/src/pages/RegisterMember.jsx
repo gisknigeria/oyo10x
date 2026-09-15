@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, LEVEL_LABEL } from '../lib/api.js';
-import { Card, Field, Alert, Loading, CheckRow, Status } from '../components/ui.jsx';
+import { Card, Field, Alert, Loading, Status } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
 const TITLES = ['Mr', 'Mrs', 'Miss', 'Dr', 'Engr', 'Chief', 'Alhaji', 'Alhaja', 'Pastor', 'Imam'];
@@ -552,26 +552,6 @@ export default function RegisterMember() {
           )}
         </Card>
 
-        <div style={{ height: 14 }} />
-
-        <Card title="What gets checked"
-              note="Applied automatically the moment you save">
-          <CheckRow name="Phone format" result={{ status: 'pass', reason: 'Nigerian mobile number' }} />
-          <CheckRow name="NIN format" result={{ status: 'pass', reason: '11 digits' }} />
-          <CheckRow name="PVC / VIN format" result={{ status: 'pass', reason: '19 characters' }} />
-          <CheckRow name="Duplicate detection" result={{ status: 'pass',
-            reason: 'Phone, NIN, PVC and account checked against every existing record' }} />
-          <CheckRow name="Location inside Oyo State" result={{ status: 'pass',
-            reason: 'GPS compared against the state boundary' }} />
-          <CheckRow name="Family / padding patterns" result={{ status: 'pass',
-            reason: 'Repeated surnames and shared bank accounts are flagged' }} />
-          <CheckRow name="INEC voter roll" result={{ status: 'not_configured',
-            reason: 'Matched only when a register extract is loaded' }} />
-          <CheckRow name="NIN identity (NIMC)" result={{ status: 'not_configured',
-            reason: 'Requires a licensed KYC provider key' }} />
-          <CheckRow name="Bank account name" result={{ status: 'not_configured',
-            reason: 'Requires a Paystack key' }} />
-        </Card>
       </div>
     </div>
     </>
