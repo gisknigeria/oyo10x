@@ -15,6 +15,26 @@ const client = createClient({
 });
 
 const execute = (sql, args = []) => client.execute({ sql, args });
+const makeDb = (run) => ({
+  exec: async (sql) => {
+    const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
+    for (const statement of statements) await run(statement);
+  },
+  prepare: (sql) => ({
+    get: async (...args) => {
+      const result = await run(sql, args);
+      return result.rows[0] || undefined;
+    },
+    all: async (...args) => (await run(sql, args)).rows,
+    run: async (...args) => {
+      const result = await run(sql, args);
+      return {
+        changes: Number(result.rowsAffected || 0),
+        lastInsertRowid: result.lastInsertRowid,
+      };
+    },
+  }),
+});
 const exec = async (sql) => {
   const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
   for (const statement of statements) await execute(statement);
@@ -37,13 +57,14 @@ export const db = {
     },
   }),
   transaction: async (fn) => {
-    await execute('BEGIN');
+    const tx = await client.transaction('write');
+    const txDb = makeDb((sql, args = []) => tx.execute({ sql, args }));
     try {
-      const result = await fn();
-      await execute('COMMIT');
+      const result = await fn(txDb);
+      await tx.commit();
       return result;
     } catch (error) {
-      await execute('ROLLBACK');
+      try { await tx.rollback(); } catch { /* preserve the original error */ }
       throw error;
     }
   },

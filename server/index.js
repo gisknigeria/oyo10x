@@ -953,23 +953,18 @@ app.delete('/api/users/:id', authenticate, requireRole('admin', 'superadmin'), w
     return res.status(403).json({ error: 'Super administrator accounts cannot be deleted' });
   }
 
-  await db.exec('BEGIN');
-  try {
-    await db.prepare('UPDATE users SET upline_id = NULL WHERE upline_id = ?').run(userId);
-    await db.prepare('UPDATE members SET upline_user_id = NULL, reviewed_by = NULL WHERE upline_user_id = ? OR reviewed_by = ?')
+  await db.transaction(async (tx) => {
+    await tx.prepare('UPDATE users SET upline_id = NULL WHERE upline_id = ?').run(userId);
+    await tx.prepare('UPDATE members SET upline_user_id = NULL, reviewed_by = NULL WHERE upline_user_id = ? OR reviewed_by = ?')
       .run(userId, userId);
-    await db.prepare('UPDATE submissions SET user_id = NULL, reviewed_by = NULL WHERE user_id = ? OR reviewed_by = ?')
+    await tx.prepare('UPDATE submissions SET user_id = NULL, reviewed_by = NULL WHERE user_id = ? OR reviewed_by = ?')
       .run(userId, userId);
-    await db.prepare('UPDATE tasks SET created_by = NULL WHERE created_by = ?').run(userId);
-    await db.prepare('UPDATE points_ledger SET user_id = NULL WHERE user_id = ?').run(userId);
-    await db.prepare('UPDATE audit_log SET user_id = NULL WHERE user_id = ?').run(userId);
-    await db.prepare('DELETE FROM registration_drafts WHERE creator_user_id = ?').run(userId);
-    await db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    await db.exec('COMMIT');
-  } catch (error) {
-    await db.exec('ROLLBACK');
-    throw error;
-  }
+    await tx.prepare('UPDATE tasks SET created_by = NULL WHERE created_by = ?').run(userId);
+    await tx.prepare('UPDATE points_ledger SET user_id = NULL WHERE user_id = ?').run(userId);
+    await tx.prepare('UPDATE audit_log SET user_id = NULL WHERE user_id = ?').run(userId);
+    await tx.prepare('DELETE FROM registration_drafts WHERE creator_user_id = ?').run(userId);
+    await tx.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  });
 
   audit(req.user.id, req.user.username, 'user_deleted', 'user', userId,
     { username: target.username, role: target.role }, ip(req));
