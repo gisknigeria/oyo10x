@@ -204,6 +204,10 @@ for (const [table, column, type] of [
   ['members', 'bank_verified_name', 'TEXT'],
   ['members', 'bank_verified_at', 'TEXT'],
   ['members', 'bank_verified_source', 'TEXT'],
+  // A coordinator is a mobiliser promoted by admin to oversee a ward/LGA
+  // (everyone in that area, not just people they personally added) rather
+  // than a separate registration tier like the old Ambassador/Champion.
+  ['users', 'is_coordinator', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   try {
     await db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type);

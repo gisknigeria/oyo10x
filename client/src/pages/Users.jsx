@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { api, num, timeAgo, ROLE_LABEL } from '../lib/api.js';
+import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 
-const ROLES = ['candidate', 'ambassador', 'champion', 'mobiliser', 'admin'];
+const ROLES = ['candidate', 'mobiliser', 'admin'];
 const SCOPES = [
   { v: 'state', label: 'Whole state (all 33 LGAs)' },
   { v: 'senatorial', label: 'Senatorial district' },
@@ -179,11 +179,15 @@ function EditUser({ user, geo, onClose, onSaved }) {
   const [error, setError] = useState('');
   const set = (key) => (e) => setU((s) => ({ ...s, [key]: e.target.value }));
   useEffect(() => {
-    if (!geo || user.role !== 'mobiliser' || user.scope_type !== 'ward') return;
+    // A ward-scoped Mobiliser is normally a leftover from before Coordinators
+    // existed and should be narrowed back to their own polling unit -- unless
+    // they were deliberately promoted to Coordinator, in which case the ward
+    // (or LGA) scope is the whole point and must be left alone.
+    if (!geo || user.role !== 'mobiliser' || user.scope_type !== 'ward' || user.is_coordinator) return;
     const lga = geo.lgas.find((name) => (geo.wards[name] || []).includes(user.scope_value));
     setLocation({ lga: lga || '', ward: user.scope_value || '' });
     setU((s) => ({ ...s, scope_type: 'polling_unit', scope_value: '' }));
-  }, [geo, user.role, user.scope_type, user.scope_value]);
+  }, [geo, user.role, user.scope_type, user.scope_value, user.is_coordinator]);
   const pollingWards = geo?.polling_units?.[location.lga] || {};
   const pollingUnits = pollingWards[location.ward] || [];
   const save = async () => {
@@ -238,6 +242,138 @@ function EditUser({ user, geo, onClose, onSaved }) {
   );
 }
 
+function CoordinatorModal({ user, geo, onClose, onSaved }) {
+  const [scopeType, setScopeType] = useState('ward');
+  const [lga, setLga] = useState('');
+  const [ward, setWard] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const wardOptions = geo?.wards?.[lga] || [];
+
+  const save = async () => {
+    setBusy(true); setError('');
+    try {
+      await api.post('/users/' + user.id + '/coordinator', {
+        is_coordinator: true,
+        scope_type: scopeType,
+        scope_value: scopeType === 'ward' ? ward : lga,
+      });
+      onSaved(); onClose();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const ready = scopeType === 'lga' ? !!lga : !!(lga && ward);
+
+  return (
+    <Modal title={'Appoint ' + user.full_name + ' as Coordinator'} onClose={onClose} footer={
+      <div className="btn-row">
+        <button className="btn" onClick={save} disabled={busy || !ready}>
+          {busy && <span className="spinner" />} Appoint coordinator
+        </button>
+        <button className="btn secondary" onClick={onClose}>Cancel</button>
+      </div>
+    }>
+      {error && <Alert type="error">{error}</Alert>}
+      <Alert type="info">
+        A Coordinator keeps adding people like any Mobiliser, but can also see
+        and review everyone registered across the area you assign here —
+        not just the people they personally added.
+      </Alert>
+      <Field label="Oversee">
+        <select value={scopeType} onChange={(e) => { setScopeType(e.target.value); setWard(''); }}>
+          <option value="ward">One ward</option>
+          <option value="lga">A whole LGA</option>
+        </select>
+      </Field>
+      <div className="grid grid-2">
+        <Field label="LGA" required>
+          <select value={lga} onChange={(e) => { setLga(e.target.value); setWard(''); }}>
+            <option value="">Select an LGA</option>
+            {(geo?.lgas || []).map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </Field>
+        {scopeType === 'ward' && (
+          <Field label="Ward" required>
+            <select value={ward} onChange={(e) => setWard(e.target.value)} disabled={!lga}>
+              <option value="">Select a ward</option>
+              {wardOptions.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function ExportCredentialsModal({ onClose }) {
+  const [role, setRole] = useState('all');
+  const [onlyUnused, setOnlyUnused] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  const run = async () => {
+    setBusy(true); setError('');
+    try {
+      await downloadCsvPost('/admin/export-credentials',
+        { role, only_unused: onlyUnused },
+        'oyo10x-credentials-' + role + '.csv');
+      setDone(true);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="Export login credentials" onClose={onClose} footer={
+      <div className="btn-row">
+        <button className="btn danger" onClick={run} disabled={busy}>
+          {busy && <span className="spinner" />} Reset &amp; download CSV
+        </button>
+        <button className="btn secondary" onClick={onClose}>
+          {done ? 'Done' : 'Cancel'}
+        </button>
+      </div>
+    }>
+      {error && <Alert type="error">{error}</Alert>}
+      {done && (
+        <Alert type="success">
+          Downloaded. Every password in that file is live right now — send it
+          out promptly.
+        </Alert>
+      )}
+      <Alert type="warn" title="This resets passwords. ">
+        A password is only ever shown once when an account is created, so
+        this is the only way to recover it later — but it works by
+        generating a brand new one. Anyone whose password gets reset here
+        will need the new one from this file; their old password stops
+        working immediately.
+      </Alert>
+      <Field label="Which accounts">
+        <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <option value="all">Everyone (except super administrators)</option>
+          <option value="candidate">Candidates only</option>
+          <option value="mobiliser">Mobilisers only</option>
+          <option value="admin">Administrators only</option>
+        </select>
+      </Field>
+      <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
+        <input type="checkbox" checked={onlyUnused}
+               onChange={(e) => setOnlyUnused(e.target.checked)}
+               style={{ width: 'auto', marginTop: 2 }} />
+        <span style={{ fontSize: 13 }}>
+          Only accounts that have never logged in
+          <span className="hint" style={{ display: 'block' }}>
+            Recommended — leaves alone anyone who has already set their own password.
+            Turn this off only if you need to force a reset for everyone, including
+            people already using the app.
+          </span>
+        </span>
+      </label>
+    </Modal>
+  );
+}
+
 export default function Users() {
   const [rows, setRows] = useState(null);
   const [geo, setGeo] = useState(null);
@@ -245,6 +381,8 @@ export default function Users() {
   const [creating, setCreating] = useState(false);
   const [reset, setReset] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [promoting, setPromoting] = useState(null);
+  const [exporting, setExporting] = useState(false);
   const [q, setQ] = useState('');
 
   const load = () => api.get('/users').then((d) => setRows(d.rows)).catch((e) => setError(e.message));
@@ -264,6 +402,11 @@ export default function Users() {
       });
       load();
     } catch (e) { setError(e.message); }
+  };
+
+  const removeCoordinator = async (u) => {
+    try { await api.post('/users/' + u.id + '/coordinator', { is_coordinator: false }); load(); }
+    catch (e) { setError(e.message); }
   };
 
   if (!rows) return <Loading label="Loading logins" />;
@@ -291,13 +434,16 @@ export default function Users() {
         </Modal>
       )}
       {editing && <EditUser user={editing} geo={geo} onClose={() => setEditing(null)} onSaved={load} />}
+      {promoting && <CoordinatorModal user={promoting} geo={geo}
+        onClose={() => setPromoting(null)} onSaved={load} />}
+      {exporting && <ExportCredentialsModal onClose={() => { setExporting(false); load(); }} />}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total logins" value={num(rows.length)} accent />
         <Stat label="Candidates" value={num(byRole.candidate || 0)}
               foot="Gov, Deputy, Senators, Reps, Assembly" />
-        <Stat label="Field logins"
-              value={num((byRole.ambassador || 0) + (byRole.champion || 0) + (byRole.mobiliser || 0))} />
+        <Stat label="Mobilisers" value={num(byRole.mobiliser || 0)}
+              foot={num(rows.filter((u) => u.is_coordinator).length) + ' appointed coordinator'} />
         <Stat label="Suspended"
               value={num(rows.filter((u) => u.status !== 'active').length)} />
       </div>
@@ -306,6 +452,9 @@ export default function Users() {
         <input type="text" placeholder="Search username, name or constituency"
                value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 280 }} />
         <div className="spacer" />
+        <button className="btn sm secondary" onClick={() => setExporting(true)}>
+          Export credentials
+        </button>
         <button className="btn sm" onClick={() => setCreating(true)}>+ Create login</button>
       </div>
 
@@ -329,19 +478,31 @@ export default function Users() {
                     <td>{u.full_name}</td>
                     <td>
                       <span className="badge">{ROLE_LABEL[u.role] || u.role}</span>
+                      {u.is_coordinator ? (
+                        <span className="badge green" style={{ marginLeft: 4 }}>Coordinator</span>
+                      ) : null}
                       {u.role === 'candidate' && u.office && (
                         <div className="muted" style={{ fontSize: 12 }}>{u.office}</div>
                       )}
                     </td>
                     <td className="muted">
-                      {u.scope_type === 'polling_unit' ? (
+                      {u.role === 'mobiliser' && !u.is_coordinator ? (
+                        <>
+                          <div>Only people they add</div>
+                          <div style={{ fontSize: 11 }}>
+                            base: {String(u.scope_value || '').split('|').pop() || 'not assigned'}
+                          </div>
+                        </>
+                      ) : u.scope_type === 'polling_unit' ? (
                         <>{String(u.scope_value || '').split('|').map((part, i) => (
                           <div key={i}>{part || 'Not assigned'}</div>
                         ))}</>
                       ) : u.role === 'mobiliser' && u.scope_type === 'ward' ? (
                         <><div>{u.scope_value || 'Ward'}</div><div className="badge amber">Polling unit not assigned</div></>
                       ) : (u.scope_value || 'All 33 LGAs')}
-                      <div style={{ fontSize: 11 }}>{u.scope_type.replace(/_/g, ' ')}</div>
+                      {!(u.role === 'mobiliser' && !u.is_coordinator) && (
+                        <div style={{ fontSize: 11 }}>{u.scope_type.replace(/_/g, ' ')}</div>
+                      )}
                     </td>
                     <td className="num">{num(u.registered)}</td>
                     <td className="muted nowrap">
@@ -354,6 +515,17 @@ export default function Users() {
                     <td>
                       <div className="btn-row">
                         <button className="btn sm secondary" onClick={() => setEditing(u)}>Edit</button>
+                        {u.role === 'mobiliser' && (
+                          u.is_coordinator ? (
+                            <button className="btn sm secondary" onClick={() => removeCoordinator(u)}>
+                              Remove coordinator
+                            </button>
+                          ) : (
+                            <button className="btn sm secondary" onClick={() => setPromoting(u)}>
+                              Make coordinator
+                            </button>
+                          )
+                        )}
                         <button className="btn sm secondary" onClick={() => doReset(u)}>
                           Reset password
                         </button>

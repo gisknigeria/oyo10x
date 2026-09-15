@@ -397,6 +397,14 @@ tbody tr:hover { background: var(--green-50); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .mono { font-family: var(--mono); font-size: 12px; }
 .muted { color: var(--ink-500); }
+
+/* Bulk-add table: compact inputs so many rows stay scannable. */
+.bulk-table td { padding: 4px 6px; }
+.bulk-table input[type="text"], .bulk-table select {
+  padding: 6px 8px; font-size: 13px; min-width: 90px;
+}
+.bulk-table tr.row-ok td { background: var(--green-50); }
+.bulk-table tr.row-fail td { background: var(--red-100); }
 .nowrap { white-space: nowrap; }
 
 /* ------------------------------- badges ------------------------------- */

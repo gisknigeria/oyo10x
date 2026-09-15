@@ -69,7 +69,12 @@ const adminId = await createUser({
   role: 'superadmin', full_name: 'Programme Administrator',
   scope_type: 'state',
 });
-console.log('Super administrator created.');
+await createUser({
+  username: 'admin2', password: 'oyo10x-admin2', must_reset: 0,
+  role: 'admin', full_name: 'Deputy Administrator',
+  scope_type: 'state',
+});
+console.log('Administrator accounts created.');
 
 if (!DEMO_SEED) {
   const csvPath = path.join(__dirname, 'data', 'credentials.csv');
@@ -79,8 +84,9 @@ if (!DEMO_SEED) {
       .concat(credentials.map((c) =>
         [c.username, c.password, c.role, c.office, c.full_name, c.scope].map(esc).join(',')))
       .join('\n'));
-  console.log('Minimal seed complete: 1 administrator account created.');
-  console.log('  Administrator   admin / oyo10x-admin');
+  console.log('Minimal seed complete: 2 administrator accounts created.');
+  console.log('  Super administrator   admin / oyo10x-admin');
+  console.log('  Administrator         admin2 / oyo10x-admin2');
   process.exit(0);
 }
 
@@ -254,10 +260,10 @@ const insertTask = await db.prepare(
 );
 
 const TASKS = [
-  { title: 'Attend the ward mobilisation rally', type: 'rally', points: 5, photo: 1,
+  { title: 'Attend the ward mobilisation rally', type: 'rally', points: 5,
     level: 'all',
-    desc: 'Attend your ward rally and upload a photograph taken at the venue.' },
-  { title: 'Community priorities survey', type: 'survey', points: 5, photo: 0,
+    desc: 'Attend your ward rally and log who else was present.' },
+  { title: 'Community priorities survey', type: 'survey', points: 5,
     level: 'all',
     desc: 'Answer the three community priority questions.',
     questions: [
@@ -268,16 +274,16 @@ const TASKS = [
         type: 'select', options: ['Yes, all adults', 'Some adults', 'No'] },
       { id: 'q3', label: 'Anything the candidate should know?', type: 'text' },
     ] },
-  { title: 'Household canvass: 10 doors', type: 'canvass', points: 5, photo: 0,
+  { title: 'Household canvass: 10 doors', type: 'canvass', points: 5,
     level: 'mobiliser',
     desc: 'Visit ten households in your polling unit and log the conversation outcome.' },
-  { title: 'Ward coordination report', type: 'issue_report', points: 10, photo: 1,
+  { title: 'Ward coordination report', type: 'issue_report', points: 10,
     level: 'champion',
-    desc: 'Photograph and report one verified infrastructure or service problem in your ward.' },
-  { title: 'LGA performance review meeting', type: 'meeting', points: 10, photo: 1,
+    desc: 'Report one verified infrastructure or service problem in your ward.' },
+  { title: 'LGA performance review meeting', type: 'meeting', points: 10,
     level: 'ambassador',
     desc: 'Convene the monthly LGA review with your Champions and log attendance.' },
-  { title: 'Support a community meeting', type: 'meeting', points: 10, photo: 1,
+  { title: 'Support a community meeting', type: 'meeting', points: 10,
     level: 'all', mandatory: 0,
     desc: 'Optional. Convene or support a community meeting in your ward.' },
 ];
@@ -285,7 +291,7 @@ const TASKS = [
 const taskIds = [];
 for (const t of TASKS) {
   const info = await insertTask.run(
-    t.title, t.desc, t.type, t.points, t.mandatory === 0 ? 0 : 1, t.photo, 1,
+    t.title, t.desc, t.type, t.points, t.mandatory === 0 ? 0 : 1, 0, 1,
     t.questions ? JSON.stringify(t.questions) : null,
     t.level, 'state', null, PER, null, 'open', adminId, nowISO()
   );

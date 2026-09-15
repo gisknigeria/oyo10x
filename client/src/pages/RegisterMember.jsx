@@ -17,9 +17,202 @@ const BLANK = {
   bank_name: '', account_number: '', account_name: '',
 };
 
+const BLANK_ROW = { title: '', first_name: '', last_name: '', phone: '', pvc_no: '', nin: '',
+  bank_name: '', account_number: '', account_name: '' };
+const INITIAL_ROWS = 10;
+
+function BulkRegisterTable({ geo }) {
+  const [level, setLevel] = useState(geo.levels[0] || '');
+  const [lga, setLga] = useState('');
+  const [ward, setWard] = useState('');
+  const [pollingUnit, setPollingUnit] = useState('');
+  const [rows, setRows] = useState(() => Array.from({ length: INITIAL_ROWS }, () => ({ ...BLANK_ROW })));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [results, setResults] = useState(null);
+
+  const wards = geo.wards[lga] || [];
+  const pollingUnits = (geo.polling_units?.[lga]?.[ward]) || [];
+
+  const setRow = (i, patch) =>
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const addRow = () => setRows((rs) => [...rs, { ...BLANK_ROW }]);
+  const addTen = () => setRows((rs) => [...rs, ...Array.from({ length: 10 }, () => ({ ...BLANK_ROW }))]);
+  const removeRow = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
+  const clearAll = () => {
+    setRows(Array.from({ length: INITIAL_ROWS }, () => ({ ...BLANK_ROW })));
+    setResults(null);
+  };
+
+  const filledRows = rows
+    .map((r, i) => ({ ...r, _index: i }))
+    .filter((r) => r.first_name.trim() || r.last_name.trim() || r.phone.trim());
+
+  const ready = level && lga && ward && pollingUnit && filledRows.length > 0
+    && filledRows.every((r) => r.first_name.trim() && r.last_name.trim() && r.phone.trim());
+
+  const save = async () => {
+    setBusy(true); setError(''); setResults(null);
+    try {
+      const res = await api.post('/members/bulk', {
+        level, lga, ward, polling_unit: pollingUnit,
+        rows: filledRows.map(({ _index, ...r }) => r),
+      });
+      setResults(res.rows.map((r, i) => ({ ...r, input: filledRows[i] })));
+      if (res.failed === 0) {
+        setRows(Array.from({ length: INITIAL_ROWS }, () => ({ ...BLANK_ROW })));
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyAllCredentials = () => {
+    const lines = (results || []).filter((r) => r.ok).map((r) =>
+      r.name + ': ' + r.login.username + ' / ' + r.login.password);
+    navigator.clipboard?.writeText(lines.join('\n'));
+  };
+
+  return (
+    <Card title="Add many people at once"
+          note="Fill as many rows as you need — everyone gets their own login automatically.">
+      {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
+
+      {results && (
+        <Alert type={results.every((r) => r.ok) ? 'success' : 'warn'}
+               title={results.filter((r) => r.ok).length + ' of ' + results.length + ' saved. '}
+               onClose={() => setResults(null)}>
+          {results.some((r) => r.ok) && (
+            <div className="btn-row" style={{ marginTop: 8 }}>
+              <button className="btn sm secondary" onClick={copyAllCredentials}>
+                Copy all usernames &amp; passwords
+              </button>
+            </div>
+          )}
+        </Alert>
+      )}
+
+      <div className="section-title">Where these people are</div>
+      <div className="grid grid-3" style={{ marginBottom: 4 }}>
+        <Field label="Level" required>
+          <select value={level} onChange={(e) => setLevel(e.target.value)}>
+            {geo.levels.map((l) => <option key={l} value={l}>{LEVEL_LABEL[l] || l}</option>)}
+          </select>
+        </Field>
+        <Field label="LGA" required>
+          <select value={lga} onChange={(e) => { setLga(e.target.value); setWard(''); setPollingUnit(''); }}>
+            <option value="">Select an LGA</option>
+            {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+        </Field>
+        <Field label="Ward" required>
+          <select value={ward} onChange={(e) => { setWard(e.target.value); setPollingUnit(''); }} disabled={!lga}>
+            <option value="">Select a ward</option>
+            {wards.map((w) => <option key={w} value={w}>{w}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Polling unit" required>
+        <select value={pollingUnit} onChange={(e) => setPollingUnit(e.target.value)} disabled={!ward}>
+          <option value="">Select a polling unit</option>
+          {pollingUnits.map((u) => <option key={u} value={u}>{u}</option>)}
+        </select>
+      </Field>
+
+      <div className="section-title">People — {filledRows.length} filled of {rows.length} rows</div>
+      <div className="table-wrap">
+        <table className="bulk-table">
+          <thead>
+            <tr>
+              <th style={{ width: 28 }}>#</th>
+              <th>Title</th><th>First name *</th><th>Last name *</th><th>Phone *</th>
+              <th>PVC/VIN</th><th>NIN</th><th>Bank</th><th>Account No.</th><th>Account name</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const rowResult = results?.[filledRows.findIndex((f) => f._index === i)];
+              return (
+                <tr key={i} className={rowResult ? (rowResult.ok ? 'row-ok' : 'row-fail') : ''}>
+                  <td className="muted">{i + 1}</td>
+                  <td>
+                    <select value={r.title} onChange={(e) => setRow(i, { title: e.target.value })}>
+                      <option value="">--</option>
+                      {['Mr', 'Mrs', 'Miss', 'Chief', 'Alhaji', 'Alhaja'].map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td><input type="text" value={r.first_name}
+                             onChange={(e) => setRow(i, { first_name: e.target.value })} /></td>
+                  <td><input type="text" value={r.last_name}
+                             onChange={(e) => setRow(i, { last_name: e.target.value })} /></td>
+                  <td><input type="text" value={r.phone} placeholder="0803..."
+                             onChange={(e) => setRow(i, { phone: e.target.value })} /></td>
+                  <td><input type="text" value={r.pvc_no}
+                             onChange={(e) => setRow(i, { pvc_no: e.target.value.toUpperCase() })} /></td>
+                  <td><input type="text" value={r.nin}
+                             onChange={(e) => setRow(i, { nin: e.target.value })} /></td>
+                  <td>
+                    <select value={r.bank_name} onChange={(e) => setRow(i, { bank_name: e.target.value })}>
+                      <option value="">--</option>
+                      {geo.banks.map((b) => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  </td>
+                  <td><input type="text" value={r.account_number}
+                             onChange={(e) => setRow(i, { account_number: e.target.value })} /></td>
+                  <td><input type="text" value={r.account_name}
+                             onChange={(e) => setRow(i, { account_name: e.target.value })} /></td>
+                  <td>
+                    <button type="button" className="btn sm secondary" onClick={() => removeRow(i)}
+                            title="Remove row">✕</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {results && (
+        <div style={{ marginTop: 8 }}>
+          {results.filter((r) => !r.ok).map((r, i) => (
+            <div key={i} className="error-text" style={{ marginBottom: 3 }}>
+              Row {r.input?._index + 1}: {r.error}
+              {r.flags?.length ? ' — ' + r.flags.map((f) => f.message).join('; ') : ''}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="btn-row" style={{ marginTop: 14 }}>
+        <button type="button" className="btn secondary sm" onClick={addRow}>+ Add row</button>
+        <button type="button" className="btn secondary sm" onClick={addTen}>+ Add 10 rows</button>
+        <div className="spacer" />
+        <button type="button" className="btn secondary" onClick={clearAll} disabled={busy}>
+          Clear
+        </button>
+        <button className="btn" onClick={save} disabled={!ready || busy}>
+          {busy && <span className="spinner" />}
+          {busy ? 'Saving' : 'Save all'}
+        </button>
+      </div>
+      {!ready && (
+        <div className="hint" style={{ marginTop: 6 }}>
+          Choose the level and location above, and fill first name, last name and
+          phone for at least one row.
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function RegisterMember() {
   const { me } = useAuth();
   const [geo, setGeo] = useState(null);
+  const [mode, setMode] = useState('single');
   const [form, setForm] = useState(BLANK);
   const [gps, setGps] = useState(null);
   const [gpsState, setGpsState] = useState('idle');
@@ -117,8 +310,8 @@ export default function RegisterMember() {
   if (!geo.levels.length) {
     return (
       <Alert type="warn" title="Your account cannot register members. ">
-        Registration is carried out by candidates, Ambassadors, Champions and
-        Mobilisers. Contact the programme office if this is wrong.
+        Registration is carried out by Candidates and Mobilisers.
+        Contact the programme office if this is wrong.
       </Alert>
     );
   }
@@ -128,8 +321,28 @@ export default function RegisterMember() {
   const required = ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit'];
   const ready = required.every((k) => String(form[k] || '').trim());
 
+  const modeToggle = (
+    <div className="pill-row" style={{ marginBottom: 14 }}>
+      <button className={'pill' + (mode === 'single' ? ' active' : '')}
+              onClick={() => setMode('single')}>One person at a time</button>
+      <button className={'pill' + (mode === 'bulk' ? ' active' : '')}
+              onClick={() => setMode('bulk')}>Add many at once</button>
+    </div>
+  );
+
+  if (mode === 'bulk') {
+    return (
+      <>
+        {modeToggle}
+        <BulkRegisterTable geo={geo} />
+      </>
+    );
+  }
+
   return (
-    <div className="grid" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 16 }}>
+    <>
+      {modeToggle}
+      <div className="grid" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 16 }}>
       <div>
         {result && (
           <Alert type="success" title="Member registered. " onClose={() => setResult(null)}>
@@ -361,5 +574,6 @@ export default function RegisterMember() {
         </Card>
       </div>
     </div>
+    </>
   );
 }

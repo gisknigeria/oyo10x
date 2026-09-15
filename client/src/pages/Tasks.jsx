@@ -17,7 +17,7 @@ const TYPES = [
 
 const BLANK_TASK = {
   title: '', description: '', type: 'canvass', points: 5, mandatory: true,
-  requires_photo: false, requires_location: true, target_level: 'all',
+  requires_location: true, target_level: 'all',
   target_scope_type: 'state', target_scope_value: '', questions: [],
 };
 
@@ -25,7 +25,6 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   const { me } = useAuth();
   const [answers, setAnswers] = useState(() => Object.fromEntries((task.questions || []).map((q) => [q.id, ''])));
   const [note, setNote] = useState('');
-  const [photo, setPhoto] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [location, setLocation] = useState({ lat: null, lng: null, accuracy: null });
@@ -53,7 +52,6 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
       if (me?.user?.member_id) form.append('member_id', String(me.user.member_id));
       form.append('answers', JSON.stringify(answers));
       if (note) form.append('note', note);
-      if (photo) form.append('photo', photo);
       if (location.lat != null && location.lng != null) {
         form.append('lat', String(location.lat));
         form.append('lng', String(location.lng));
@@ -102,12 +100,6 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
         </Field>
       ))}
 
-      {task.requires_photo && (
-        <Field label="Photo evidence" required>
-          <input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} />
-        </Field>
-      )}
-
       {task.requires_location && (
         <div className="card" style={{ padding: 10, marginBottom: 12 }}>
           <div className="muted" style={{ fontSize: 12 }}>
@@ -132,7 +124,6 @@ function TaskForm({ geo, task = null, onSave, onClose }) {
     type: task.type || 'canvass',
     points: task.points || 5,
     mandatory: task.mandatory !== false,
-    requires_photo: !!task.requires_photo,
     requires_location: task.requires_location !== false,
     target_level: task.target_level || 'all',
     target_scope_type: task.target_scope_type || 'state',
@@ -208,9 +199,7 @@ function TaskForm({ geo, task = null, onSave, onClose }) {
       <div className="grid grid-2">
         <Field label="Who must do this">
           <select value={t.target_level} onChange={set('target_level')}>
-            <option value="all">All levels (general + ambassador/champion/mobiliser)</option>
-            <option value="ambassador">Ambassadors only</option>
-            <option value="champion">Champions only</option>
+            <option value="all">Everyone (Mobilisers + Participants)</option>
             <option value="mobiliser">Mobilisers only</option>
             <option value="participant">Participants only</option>
           </select>
@@ -237,11 +226,6 @@ function TaskForm({ geo, task = null, onSave, onClose }) {
         <input type="checkbox" checked={t.mandatory} onChange={set('mandatory')}
                style={{ width: 'auto' }} />
         <span>Mandatory — payment is withheld until this is approved</span>
-      </label>
-      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <input type="checkbox" checked={t.requires_photo} onChange={set('requires_photo')}
-               style={{ width: 'auto' }} />
-        <span>Photo evidence required</span>
       </label>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
         <input type="checkbox" checked={t.requires_location} onChange={set('requires_location')}
@@ -383,7 +367,6 @@ export default function Tasks() {
                       {t.mandatory
                         ? <span className="badge amber">mandatory</span>
                         : <span className="badge">optional</span>}
-                      {t.requires_photo ? <span className="badge blue" style={{ marginLeft: 4 }}>photo</span> : null}
                       {t.requires_location ? <span className="badge blue" style={{ marginLeft: 4 }}>GPS</span> : null}
                     </td>
                     <td className="num">{num(t.submissions)}</td>
@@ -391,9 +374,15 @@ export default function Tasks() {
                     <td><Status value={t.status} /></td>
                     {!me.permissions.is_admin && (
                       <td className="task-action-cell">
-                        <button className="btn sm secondary task-action-btn" onClick={() => setSelectedTask(t)}>
-                          Open task
-                        </button>
+                        {me.user.member_id ? (
+                          <button className="btn sm secondary task-action-btn" onClick={() => setSelectedTask(t)}>
+                            Open task
+                          </button>
+                        ) : (
+                          <span className="muted" style={{ fontSize: 12 }}>
+                            Field task — nothing to submit here
+                          </span>
+                        )}
                       </td>
                     )}
                     {me.permissions.is_admin && (

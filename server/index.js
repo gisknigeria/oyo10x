@@ -42,14 +42,17 @@ const app = express();
 // left unset, every origin is allowed, which is fine given the auth model.
 const configuredOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
-const allowedOrigins = new Set([
-  'https://oyo10x.vercel.app',
-  ...configuredOrigins,
-]);
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS'));
+    // No lockdown configured: allow everything, as the auth model above
+    // intends. This also covers same-origin requests (single-server deploy,
+    // local dev) and Vercel preview URLs, which a fixed allowlist would
+    // otherwise reject with a 500 and no way in.
+    if (!configuredOrigins.length) return callback(null, true);
+    if (!origin || configuredOrigins.includes(origin)) return callback(null, true);
+    // Reject without throwing: an error here would 500 the whole request
+    // instead of just omitting CORS headers.
+    callback(null, false);
   },
 }));
 app.use(express.json({ limit: '2mb' }));
@@ -73,13 +76,27 @@ const draftToken = () => crypto.randomBytes(24).toString('base64url');
 
 /**
  * Build a SQL WHERE fragment limiting `members` rows to what this user may see.
- * Leadership sees by geography; field roles see their own network branch.
+ *
+ *  - Admin: everyone.
+ *  - Participant: only their own record.
+ *  - Plain Mobiliser (not a Coordinator): only the people THEY personally
+ *    added -- ownership, not geography. Two Mobilisers can share a polling
+ *    unit and must never see each other's registrants.
+ *  - Coordinator (a Mobiliser promoted by admin), Candidate, Admin: by
+ *    geography -- their assigned ward/LGA/constituency/state.
  */
 function memberScope(user) {
   if (ADMIN_ROLES.has(user.role)) return { sql: '1=1', params: [] };
 
   if (user.role === 'participant' && user.member_id) {
     return { sql: 'id = ?', params: [user.member_id] };
+  }
+
+  if (user.role === 'mobiliser' && !Number(user.is_coordinator)) {
+    return {
+      sql: '(upline_user_id = ? OR upline_member_id = ?)',
+      params: [user.id, user.member_id || -1],
+    };
   }
 
   if (user.scope_type === 'state') return { sql: '1=1', params: [] };
@@ -101,58 +118,39 @@ function memberScope(user) {
     };
   }
 
-  // Field agent: own registrations plus their own downline branch.
+  // Fallback: own registrations plus own downline branch.
   return {
     sql: '(upline_user_id = ? OR upline_member_id = ?)',
     params: [user.id, user.member_id || -1],
   };
 }
 
+// The network is two field tiers now: Mobilisers (added by admin/candidate)
+// and Participants (added by Mobilisers). Ambassador/Champion were a separate
+// registration tier; they are kept in the schema and in LEVEL_LABEL only so
+// existing historical records keep displaying correctly, but nothing can
+// register a person into those levels going forward. A Mobiliser promoted to
+// Coordinator (users.is_coordinator) supervises their ward/LGA instead of
+// needing a separate tier -- see /api/users/:id/coordinator.
 function canRegisterLevels(user) {
   if (ADMIN_ROLES.has(user.role) || user.role === 'candidate') {
-    return ['ambassador', 'champion', 'mobiliser', 'participant'];
+    return ['mobiliser', 'participant'];
   }
-  if (user.role === 'ambassador') return ['champion'];
-  if (user.role === 'champion') return ['mobiliser'];
   if (user.role === 'mobiliser') return ['participant'];
   return [];
 }
 
-async function resolveMemberForSubmission(user, explicitMemberId) {
-  const candidateId = Number(explicitMemberId ?? user.member_id ?? 0);
-  if (candidateId > 0) {
-    const row = await db.prepare('SELECT id FROM members WHERE id = ?').get(candidateId);
-    if (row) return candidateId;
-  }
-
-  const fullName = String(user.full_name || '').trim();
-  const nameParts = fullName.split(/\s+/).filter(Boolean);
-  const first = nameParts[0] || '';
-  const last = nameParts.slice(1).join(' ') || '';
-  const phone = String(user.phone || '').replace(/\D/g, '');
-
-  if (first && last) {
-    const byName = await db.prepare(
-      'SELECT id FROM members WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?) ORDER BY created_at DESC LIMIT 1'
-    ).get(first, last);
-    if (byName) return Number(byName.id);
-  }
-
-  if (first) {
-    const byFirst = await db.prepare(
-      'SELECT id FROM members WHERE LOWER(first_name) = LOWER(?) ORDER BY created_at DESC LIMIT 1'
-    ).get(first);
-    if (byFirst) return Number(byFirst.id);
-  }
-
-  if (phone) {
-    const byPhone = await db.prepare(
-      'SELECT id FROM members WHERE phone LIKE ? ORDER BY created_at DESC LIMIT 1'
-    ).get('%' + phone + '%');
-    if (byPhone) return Number(byPhone.id);
-  }
-
-  return null;
+/**
+ * The member profile a task submission should be recorded against. Only ever
+ * the account's own linked member_id, or an explicit member_id the caller is
+ * allowed to see (validated by memberScope at the call site) -- never a
+ * guess. Guessing by name or phone risks silently attributing a submission to
+ * the wrong person when two people share a name, which is worse than simply
+ * refusing.
+ */
+function resolveMemberForSubmission(user, explicitMemberId) {
+  const id = Number(explicitMemberId ?? user.member_id ?? 0);
+  return id > 0 ? id : null;
 }
 
 function scopedLgas(user) {
@@ -197,15 +195,19 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   res.json({ token: issueToken(user), user });
 }));
 
+const isCoordinator = (user) => !!(user.role === 'mobiliser' && Number(user.is_coordinator));
+const canReview = (user) => ADMIN_ROLES.has(user.role)
+  || user.role === 'candidate' || isCoordinator(user);
+
 app.get('/api/me', authenticate, (req, res) => {
   const caps = LEVEL_CAPS[req.user.role] || null;
   res.json({
     user: req.user,
     permissions: {
       is_admin: ADMIN_ROLES.has(req.user.role),
+      is_coordinator: isCoordinator(req.user),
       can_register_levels: canRegisterLevels(req.user),
-      can_review: ADMIN_ROLES.has(req.user.role)
-        || ['candidate', 'ambassador', 'champion'].includes(req.user.role),
+      can_review: canReview(req.user),
       scoped_lgas: scopedLgas(req.user),
     },
     caps,
@@ -294,42 +296,13 @@ app.post('/api/public/registration/:token', wrap(async (req, res) => {
     return res.status(404).json({ error: 'This registration link is invalid, expired, or already completed' });
   }
   const b = { ...JSON.parse(draft.data_json), ...(req.body || {}) };
-  for (const f of ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit']) {
-    if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f.replace(/_/g, ' ') });
-  }
-  const payload = {
-    first_name: String(b.first_name).trim(), last_name: String(b.last_name).trim(),
-    phone: normalisePhone(b.phone), title: b.title || null, designation: b.designation || null,
-    pvc_no: b.pvc_no ? String(b.pvc_no).toUpperCase().replace(/\s/g, '') : null,
-    nin: b.nin ? String(b.nin).replace(/\D/g, '') : null, bank_name: b.bank_name || null,
-    account_number: b.account_number ? String(b.account_number).replace(/\D/g, '') : null,
-    account_name: b.account_name || null, lga: b.lga, ward: b.ward,
-    polling_unit: String(b.polling_unit).trim(), level: b.level,
-    lat: b.lat ?? null, lng: b.lng ?? null, accuracy: b.accuracy ?? null,
-  };
-  const result = await runChecks(payload, { uplineUserId: draft.creator_user_id });
-  const hardFail = result.flags.some((f) => f.code === 'format' || f.code === 'duplicate');
-  if (hardFail) return res.status(409).json({ error: 'This entry did not pass validation', flags: result.flags });
-  const info = await db.prepare(
-    'INSERT INTO members (code,first_name,last_name,phone,title,designation,pvc_no,nin,bank_name,account_number,account_name,lga,ward,polling_unit,level,upline_user_id,lat,lng,accuracy,captured_at,status,checks_json,risk_score,risk_flags,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(referralCode('OYO'), payload.first_name, payload.last_name, payload.phone, payload.title,
-    payload.designation, payload.pvc_no, payload.nin, payload.bank_name, payload.account_number,
-    payload.account_name, payload.lga, payload.ward, payload.polling_unit, payload.level,
-    draft.creator_user_id, payload.lat, payload.lng, payload.accuracy,
-    payload.lat != null ? nowISO() : null, result.riskScore >= 50 ? 'flagged' : 'pending',
-    JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
-  const id = Number(info.lastInsertRowid);
-  const loginPassword = tempPassword();
-  const loginUsername = 'member.' + id;
-  await db.prepare(
-    'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
-    + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(loginUsername, hashPassword(loginPassword), 1, 'participant',
-    payload.first_name + ' ' + payload.last_name, payload.phone, 'polling_unit',
-    payload.lga + '|' + payload.ward + '|' + payload.polling_unit, id, 'active', nowISO());
+  const level = ['mobiliser', 'participant'].includes(b.level) ? b.level : 'participant';
+
+  const result = await registerMemberRow(b, { level, uplineUserId: draft.creator_user_id });
+  if (!result.ok) return res.status(result.status).json(result);
+
   await db.prepare('UPDATE registration_drafts SET completed_at = ? WHERE id = ?').run(nowISO(), draft.id);
-  res.status(201).json({ id, status: result.riskScore >= 50 ? 'flagged' : 'pending',
-    login: { username: loginUsername, password: loginPassword } });
+  res.status(201).json(result);
 }));
 
 app.post('/api/bank/resolve', authenticate, wrap(async (req, res) => {
@@ -351,20 +324,25 @@ const MEMBER_FIELDS = ['first_name', 'last_name', 'phone', 'title', 'designation
   'pvc_no', 'nin', 'bank_name', 'account_number', 'account_name',
   'lga', 'ward', 'polling_unit', 'level'];
 
-app.post('/api/members', authenticate, wrap(async (req, res) => {
-  const b = req.body || {};
-  const level = b.level || canRegisterLevels(req.user)[0];
+/**
+ * Validate, verify-check and insert one member row, then create a matching
+ * login for them. Shared by the single-entry form, the bulk table, and the
+ * public self-completion link, so all three behave identically and a fix
+ * made once applies everywhere.
+ *
+ * The auto-created login's role matches the level being registered -- a new
+ * Mobiliser gets a mobiliser login (so they can go on to add Participants of
+ * their own), a Participant gets a participant login (so they can complete
+ * their own tasks). This matters: registering someone as a Mobiliser but
+ * handing them a Participant login would leave them unable to add anyone.
+ */
+async function registerMemberRow(b, opts) {
+  const { level, uplineUserId, uplineMemberId, force = false, dryRun = false } = opts;
 
-  if (!canRegisterLevels(req.user).includes(level)) {
-    return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
-  }
   for (const f of ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit']) {
     if (!String(b[f] || '').trim()) {
-      return res.status(400).json({ error: 'Missing required field: ' + f.replace(/_/g, ' ') });
+      return { ok: false, status: 400, error: 'Missing required field: ' + f.replace(/_/g, ' ') };
     }
-  }
-  if (!scopedLgas(req.user).includes(b.lga)) {
-    return res.status(403).json({ error: b.lga + ' is outside your constituency' });
   }
 
   const payload = {
@@ -379,20 +357,18 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
     account_number: b.account_number ? String(b.account_number).replace(/\D/g, '') : null,
     account_name: b.account_name || null,
     lga: b.lga, ward: b.ward, polling_unit: String(b.polling_unit).trim(),
-    level,
     lat: b.lat ?? null, lng: b.lng ?? null, accuracy: b.accuracy ?? null,
   };
 
-  const result = await runChecks(payload, { uplineUserId: req.user.id });
-
-  if (req.query.dry_run === '1') return res.json({ preview: true, ...result });
+  const result = await runChecks(payload, { uplineUserId });
+  if (dryRun) return { ok: true, preview: true, ...result };
 
   const hardFail = result.flags.some((f) => f.code === 'format' || f.code === 'duplicate');
-  if (hardFail && req.query.force !== '1') {
-    return res.status(409).json({
-      error: 'This entry did not pass validation',
+  if (hardFail && !force) {
+    return {
+      ok: false, status: 409, error: 'This entry did not pass validation',
       flags: result.flags, checks: result.checks, risk_score: result.riskScore,
-    });
+    };
   }
 
   const code = referralCode('OYO');
@@ -405,7 +381,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   ).run(code, payload.first_name, payload.last_name, payload.phone, payload.title,
     payload.designation, payload.pvc_no, payload.nin, payload.bank_name,
     payload.account_number, payload.account_name, payload.lga, payload.ward,
-    payload.polling_unit, level, req.user.id, req.user.member_id || null,
+    payload.polling_unit, level, uplineUserId || null, uplineMemberId || null,
     payload.lat, payload.lng, payload.accuracy, payload.lat != null ? nowISO() : null,
     result.riskScore >= 50 ? 'flagged' : 'pending',
     JSON.stringify(result.checks), result.riskScore, JSON.stringify(result.flags), nowISO());
@@ -413,19 +389,87 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   const id = Number(info.lastInsertRowid);
   const loginPassword = tempPassword();
   const loginUsername = 'member.' + id;
+  const loginRole = level === 'mobiliser' ? 'mobiliser' : 'participant';
   await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
     + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(loginUsername, hashPassword(loginPassword), 1, 'participant',
+  ).run(loginUsername, hashPassword(loginPassword), 1, loginRole,
     payload.first_name + ' ' + payload.last_name, payload.phone, 'polling_unit',
     payload.lga + '|' + payload.ward + '|' + payload.polling_unit, id, 'active', nowISO());
-  audit(req.user.id, req.user.username, 'member_registered', 'member', id,
-    { code, level, lga: payload.lga, risk: result.riskScore }, ip(req));
 
-  res.status(201).json({
-    id, code, status: result.riskScore >= 50 ? 'flagged' : 'pending',
+  return {
+    ok: true, id, code, name: payload.first_name + ' ' + payload.last_name,
+    status: result.riskScore >= 50 ? 'flagged' : 'pending',
     login: { username: loginUsername, password: loginPassword },
     risk_score: result.riskScore, flags: result.flags, checks: result.checks,
+  };
+}
+
+app.post('/api/members', authenticate, wrap(async (req, res) => {
+  const b = req.body || {};
+  const level = b.level || canRegisterLevels(req.user)[0];
+
+  if (!canRegisterLevels(req.user).includes(level)) {
+    return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
+  }
+  if (b.lga && !scopedLgas(req.user).includes(b.lga)) {
+    return res.status(403).json({ error: b.lga + ' is outside your constituency' });
+  }
+
+  const result = await registerMemberRow(b, {
+    level, uplineUserId: req.user.id, uplineMemberId: req.user.member_id,
+    force: req.query.force === '1', dryRun: req.query.dry_run === '1',
+  });
+
+  if (result.preview) return res.json(result);
+  if (!result.ok) return res.status(result.status).json(result);
+
+  audit(req.user.id, req.user.username, 'member_registered', 'member', result.id,
+    { code: result.code, level, lga: b.lga, risk: result.risk_score }, ip(req));
+  res.status(201).json(result);
+}));
+
+/**
+ * Register many people from one table in a single request. Rows are
+ * processed independently -- one bad row (a duplicate phone, a validation
+ * failure) does not block the others. The level and location apply to the
+ * whole batch since that is almost always what is being entered (one
+ * mobiliser adding everyone from their own polling unit), but a row may
+ * override lga/ward/polling_unit if it needs to.
+ */
+app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
+  const b = req.body || {};
+  const level = b.level || canRegisterLevels(req.user)[0];
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+
+  if (!canRegisterLevels(req.user).includes(level)) {
+    return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
+  }
+  if (!rows.length) return res.status(400).json({ error: 'No rows to save' });
+  if (rows.length > 200) return res.status(400).json({ error: 'Save at most 200 rows at a time' });
+
+  const results = [];
+  for (const row of rows) {
+    const merged = { ...b, ...row, level: undefined };
+    if (merged.lga && !scopedLgas(req.user).includes(merged.lga)) {
+      results.push({ ok: false, status: 403, error: merged.lga + ' is outside your constituency',
+        input: row });
+      continue;
+    }
+    const r = await registerMemberRow(merged, {
+      level, uplineUserId: req.user.id, uplineMemberId: req.user.member_id,
+      force: req.query.force === '1',
+    });
+    if (!r.ok) r.input = row;
+    results.push(r);
+  }
+
+  const created = results.filter((r) => r.ok);
+  audit(req.user.id, req.user.username, 'members_bulk_registered', null, null,
+    { level, submitted: rows.length, created: created.length }, ip(req));
+
+  res.status(created.length ? 201 : 400).json({
+    created: created.length, failed: results.length - created.length, rows: results,
   });
 }));
 
@@ -515,8 +559,7 @@ app.get('/api/members/:id', authenticate, wrap(async (req, res) => {
 }));
 
 app.post('/api/members/:id/review', authenticate, wrap(async (req, res) => {
-  if (!ADMIN_ROLES.has(req.user.role)
-      && !['candidate', 'ambassador', 'champion'].includes(req.user.role)) {
+  if (!canReview(req.user)) {
     return res.status(403).json({ error: 'You cannot review registrations' });
   }
   const { status, note } = req.body || {};
@@ -613,7 +656,7 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
     b.title, b.description || null, b.type || 'canvass',
     Number(b.points) || ACTIVITY_POINTS[b.type] || 5,
     b.mandatory === false ? 0 : 1,
-    b.requires_photo ? 1 : 0, b.requires_location === false ? 0 : 1,
+    0, b.requires_location === false ? 0 : 1, // photo evidence retired -- always 0
     b.questions ? JSON.stringify(b.questions) : null,
     b.target_level || 'all', b.target_scope_type || 'state', b.target_scope_value || null,
     b.period || currentPeriod(), b.opens_at || null, b.due_at || null,
@@ -647,7 +690,7 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
     type: b.type || task.type || 'canvass',
     points: Number(b.points ?? task.points ?? 5) || 0,
     mandatory: b.mandatory === false ? 0 : 1,
-    requires_photo: b.requires_photo ? 1 : 0,
+    requires_photo: 0, // photo evidence retired -- always 0
     requires_location: b.requires_location === false ? 0 : 1,
     questions: Array.isArray(b.questions)
       ? b.questions
@@ -706,15 +749,19 @@ app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) =
   });
 }));
 
+// Photo evidence has been retired, but the client still posts the rest of
+// the submission (answers, note, lat/lng) as multipart form data -- keep
+// multer parsing the body, it just no longer expects a file.
 app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(async (req, res) => {
   const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   if (task.status !== 'open') return res.status(400).json({ error: 'This task is closed' });
 
-  const memberId = await resolveMemberForSubmission(req.user, req.body.member_id);
+  const memberId = resolveMemberForSubmission(req.user, req.body.member_id);
   if (!memberId) {
     return res.status(400).json({
-      error: 'This account is not linked to a member yet. Please contact admin to assign a member profile before submitting a task.',
+      error: 'Your account has no member profile to submit tasks against. '
+           + 'Ask an administrator to link one, or pick who you are submitting for.',
     });
   }
 
@@ -723,9 +770,6 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
     .get(memberId, ...scope.params);
   if (!m) return res.status(403).json({ error: 'That member is outside your scope' });
 
-  if (task.requires_photo && !req.file) {
-    return res.status(400).json({ error: 'This task requires photo evidence' });
-  }
   const lat = req.body.lat ? Number(req.body.lat) : null;
   const lng = req.body.lng ? Number(req.body.lng) : null;
   if (task.requires_location && lat == null) {
@@ -740,8 +784,7 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
     'INSERT INTO submissions (task_id,member_id,user_id,answers_json,photo_path,lat,lng,accuracy,'
     + 'note,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
   ).run(task.id, memberId, req.user.id,
-    req.body.answers || null,
-    req.file ? '/uploads/' + req.file.filename : null,
+    req.body.answers || null, null,
     lat, lng, req.body.accuracy ? Number(req.body.accuracy) : null,
     req.body.note || null, 'pending', nowISO());
 
@@ -768,8 +811,7 @@ app.get('/api/submissions', authenticate, wrap(async (req, res) => {
 }));
 
 app.post('/api/submissions/:id/review', authenticate, wrap(async (req, res) => {
-  if (!ADMIN_ROLES.has(req.user.role)
-      && !['candidate', 'ambassador', 'champion'].includes(req.user.role)) {
+  if (!canReview(req.user)) {
     return res.status(403).json({ error: 'You cannot review submissions' });
   }
   const { status, note } = req.body || {};
@@ -841,14 +883,23 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     + 'FROM members WHERE ' + scope.sql + ' GROUP BY lga ORDER BY total DESC'
   ).all(...p);
 
+  // Ward-level breakdown -- a candidate's jurisdiction can span many LGAs, so
+  // "coverage by LGA" alone does not answer "where exactly are my people".
+  const byWard = await db.prepare(
+    'SELECT lga, ward, COUNT(*) total, '
+    + "SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified, "
+    + 'COUNT(DISTINCT polling_unit) units '
+    + 'FROM members WHERE ' + scope.sql + ' GROUP BY lga, ward ORDER BY total DESC LIMIT 100'
+  ).all(...p);
+
   const coverage = await db.prepare(
     'SELECT COUNT(DISTINCT lga) lgas, COUNT(DISTINCT ward) wards, '
     + 'COUNT(DISTINCT polling_unit) units FROM members WHERE ' + scope.sql
   ).get(...p);
 
   const recent = await db.prepare(
-    'SELECT id,code,first_name,last_name,level,lga,ward,polling_unit,status,risk_score,created_at '
-    + 'FROM members WHERE ' + scope.sql + ' ORDER BY created_at DESC LIMIT 10'
+    'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,created_at '
+    + 'FROM members WHERE ' + scope.sql + ' ORDER BY created_at DESC LIMIT 25'
   ).all(...p);
 
   const tasks = await db.prepare(
@@ -872,6 +923,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     totals,
     by_level: byLevel,
     by_lga: byLga,
+    by_ward: byWard,
     coverage,
     targets: { lgas: LGAS.length, wards: TOTAL_WARDS, polling_units: TOTAL_POLLING_UNITS, engagements: 35100, mobilisers: 3510 },
     recent,
@@ -887,7 +939,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
 app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   const rows = await db.prepare(
     'SELECT id,username,role,office,full_name,phone,scope_type,scope_value,status,'
-    + 'must_reset,last_login,created_at,'
+    + 'must_reset,last_login,created_at,is_coordinator,member_id,'
     + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered '
     + 'FROM users ORDER BY role, full_name'
   ).all();
@@ -923,6 +975,57 @@ app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async
   res.json({ password: pw });
 }));
 
+/**
+ * Reset passwords for every matching login in one call and hand back a CSV.
+ *
+ * This exists because a password is only ever shown once, at creation --
+ * there is no way to recover it later. If accounts were created by the seed
+ * script running on the server itself (SEED_ON_BOOT), the credentials.csv it
+ * wrote never left that container's disk. This is the way out: reset a whole
+ * group's passwords and get a fresh, downloadable, guaranteed-correct list to
+ * distribute, without visiting each account one at a time.
+ *
+ * Defaults to only accounts that have never logged in, so it does not
+ * silently invalidate a password someone has already started using.
+ */
+app.post('/api/admin/export-credentials', authenticate, requireAdmin, wrap(async (req, res) => {
+  const role = req.body?.role || 'all';
+  const onlyUnused = req.body?.only_unused !== false;
+
+  const where = ["role != 'superadmin'", "status = 'active'"];
+  const params = [];
+  if (role !== 'all') { where.push('role = ?'); params.push(role); }
+  if (onlyUnused) where.push('last_login IS NULL');
+
+  const users = await db.prepare(
+    'SELECT id, username, full_name, role, office, scope_value FROM users WHERE '
+    + where.join(' AND ') + ' ORDER BY role, full_name'
+  ).all(...params);
+
+  if (!users.length) {
+    return res.status(404).json({ error: 'No matching accounts to reset' });
+  }
+
+  const rows = [];
+  for (const u of users) {
+    const pw = tempPassword();
+    await db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')
+      .run(hashPassword(pw), u.id);
+    rows.push({
+      username: u.username, password: pw, role: u.role,
+      office: u.office || '', full_name: u.full_name, scope: u.scope_value || '',
+    });
+  }
+
+  await audit(req.user.id, req.user.username, 'credentials_bulk_exported', null, null,
+    { role, count: rows.length }, ip(req));
+
+  const cols = ['username', 'password', 'role', 'office', 'full_name', 'scope'];
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="oyo10x-credentials-' + role + '.csv"');
+  res.send(toCSV(rows, cols));
+}));
+
 app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) => {
   const b = req.body || {};
   if (b.status !== undefined) {
@@ -944,6 +1047,46 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
     b.scope_type, b.scope_value || null, req.params.id);
   audit(req.user.id, req.user.username, 'user_updated', 'user', Number(req.params.id),
     { role: b.role, scope_type: b.scope_type }, ip(req));
+  res.json({ ok: true });
+}));
+
+/**
+ * Promote or demote a Mobiliser to Coordinator. A Coordinator is still a
+ * Mobiliser -- they can still add Participants -- but their visibility and
+ * review rights widen from "people I personally added" to "everyone in this
+ * ward/LGA", replacing what the old Ambassador/Champion tiers did, without
+ * needing a separate registration step.
+ */
+app.post('/api/users/:id/coordinator', authenticate, requireAdmin, wrap(async (req, res) => {
+  const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Login not found' });
+  if (target.role !== 'mobiliser') {
+    return res.status(400).json({ error: 'Only a Mobiliser can be appointed Coordinator' });
+  }
+
+  const makeCoordinator = req.body?.is_coordinator !== false;
+  if (makeCoordinator) {
+    const scopeType = req.body?.scope_type;
+    const scopeValue = String(req.body?.scope_value || '').trim();
+    if (!['ward', 'lga'].includes(scopeType) || !scopeValue) {
+      return res.status(400).json({ error: 'Choose a ward or an LGA for this Coordinator to oversee' });
+    }
+    await db.prepare(
+      'UPDATE users SET is_coordinator = 1, scope_type = ?, scope_value = ? WHERE id = ?'
+    ).run(scopeType, scopeValue, target.id);
+  } else {
+    // Demote back to their own polling unit -- the area they were registered at.
+    const member = target.member_id
+      ? await db.prepare('SELECT lga,ward,polling_unit FROM members WHERE id = ?').get(target.member_id)
+      : null;
+    const scopeValue = member ? member.lga + '|' + member.ward + '|' + member.polling_unit : '';
+    await db.prepare(
+      'UPDATE users SET is_coordinator = 0, scope_type = ?, scope_value = ? WHERE id = ?'
+    ).run(scopeValue ? 'polling_unit' : 'state', scopeValue, target.id);
+  }
+
+  await audit(req.user.id, req.user.username, makeCoordinator ? 'coordinator_appointed' : 'coordinator_removed',
+    'user', target.id, { scope_type: req.body?.scope_type, scope_value: req.body?.scope_value }, ip(req));
   res.json({ ok: true });
 }));
 

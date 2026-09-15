@@ -17,8 +17,98 @@ function DashboardHeading({ title, note }) {
   );
 }
 
+function LocationBreakdown({ by_lga, by_ward }) {
+  // A single LGA-scoped candidate gets a ward table (more useful than a
+  // one-row LGA table); anyone covering several LGAs gets the LGA table,
+  // which is the more legible summary at that span.
+  const singleLga = by_lga.length === 1;
+  const rows = singleLga ? by_ward : by_lga;
+
+  return (
+    <Card
+      title="Where your people are"
+      note={singleLga
+        ? by_ward.length + ' ward(s) with registrations in ' + by_lga[0].lga
+        : by_lga.length + ' LGA(s) with registrations in your constituency'}
+      bodyClass=""
+    >
+      {rows.length === 0 ? (
+        <Empty title="No registrations yet">
+          Once people are added, this breaks down exactly which areas they come from.
+        </Empty>
+      ) : (
+        <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
+          <table>
+            <thead>
+              <tr>
+                {singleLga ? <th>Ward</th> : <th>LGA</th>}
+                <th className="num">People</th>
+                <th className="num">Verified</th>
+                <th className="num">{singleLga ? 'Polling units' : 'Wards'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={singleLga ? r.ward : r.lga}>
+                  <td style={{ fontWeight: 600 }}>{singleLga ? r.ward : r.lga}</td>
+                  <td className="num">{num(r.total)}</td>
+                  <td className="num">{num(r.verified)}</td>
+                  <td className="num">{singleLga ? r.units : r.wards}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function PeopleWithLocation({ rows }) {
+  return (
+    <Card title="People under you" note="Most recently added first, with exactly where each one is from"
+          bodyClass=""
+          actions={<Link className="btn sm secondary" to="/network">View full network</Link>}>
+      {rows.length === 0 ? <Empty title="Nobody registered yet" /> : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th><th>Phone</th><th>Level</th>
+                <th>LGA</th><th>Ward</th><th>Polling unit</th>
+                <th>Status</th><th>Added</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id}>
+                  <td style={{ fontWeight: 600 }}>
+                    <Link to={'/members/' + m.id}>{m.first_name} {m.last_name}</Link>
+                  </td>
+                  <td className="mono muted">{m.phone}</td>
+                  <td><span className="badge">{LEVEL_LABEL[m.level] || m.level}</span></td>
+                  <td>{m.lga}</td>
+                  <td className="muted">{m.ward}</td>
+                  <td className="muted">{m.polling_unit}</td>
+                  <td>
+                    <Status value={m.status} />
+                    {m.risk_score >= 50 && (
+                      <span className="badge red" style={{ marginLeft: 4 }}>risk {m.risk_score}</span>
+                    )}
+                  </td>
+                  <td className="muted nowrap">{timeAgo(m.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function CandidateDashboard({ data, me }) {
-  const { totals, coverage, targets, by_level, recent, tasks, submissions } = data;
+  const { totals, coverage, targets, by_level, by_lga, by_ward, recent, tasks, submissions } = data;
   const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
 
@@ -39,11 +129,11 @@ function CandidateDashboard({ data, me }) {
           foot={(tasks.total || 0) + ' tasks this period'} />
       </div>
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
-        <Card title="Network leadership" note="People currently registered at each level">
-          <Bar label="Ambassadors" value={levels.ambassador || 0} max={33} display={levels.ambassador || 0} />
-          <Bar label="Champions" value={levels.champion || 0} max={351} display={levels.champion || 0} />
-          <Bar label="Mobilisers" value={levels.mobiliser || 0} max={3510} display={num(levels.mobiliser || 0)} />
-          <Bar label="Participants" value={levels.participant || 0} max={35100} display={num(levels.participant || 0)} />
+        <Card title="Your network" note="People currently registered under you, by role">
+          <Bar label="Mobilisers" value={levels.mobiliser || 0} max={Math.max(levels.mobiliser || 0, 10)}
+               display={num(levels.mobiliser || 0)} />
+          <Bar label="Participants" value={levels.participant || 0} max={Math.max(levels.participant || 0, 10)}
+               display={num(levels.participant || 0)} />
         </Card>
         <Card title="Next actions" note="Keep the network moving">
           <div className="btn-row" style={{ marginBottom: 12 }}>
@@ -56,7 +146,10 @@ function CandidateDashboard({ data, me }) {
           </Alert>
         </Card>
       </div>
-      <RecentRegistrations rows={recent} />
+      <div style={{ marginBottom: 16 }}>
+        <LocationBreakdown by_lga={by_lga} by_ward={by_ward} />
+      </div>
+      <PeopleWithLocation rows={recent} />
     </>
   );
 }

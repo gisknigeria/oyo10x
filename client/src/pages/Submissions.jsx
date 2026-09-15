@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { api, num, timeAgo, assetUrl } from '../lib/api.js';
+import { api, num, timeAgo } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Stat } from '../components/ui.jsx';
 
 export default function Submissions({ compact = false }) {
@@ -57,7 +57,7 @@ export default function Submissions({ compact = false }) {
               <thead>
                 <tr>
                   <th>Member</th><th>Task</th><th>Location</th>
-                  <th>Evidence</th><th className="num">Points</th>
+                  <th className="num">Points</th>
                   <th>Status</th><th>When</th><th></th>
                 </tr>
               </thead>
@@ -92,11 +92,6 @@ export default function Submissions({ compact = false }) {
                           {s.lat.toFixed(4)}, {s.lng.toFixed(4)}
                         </div>
                       )}
-                    </td>
-                    <td>
-                      {s.photo_path
-                        ? <a href={assetUrl(s.photo_path)} target="_blank" rel="noreferrer">View photo</a>
-                        : <span className="muted">--</span>}
                     </td>
                     <td className="num">{s.points_awarded || s.task_points}</td>
                     <td><Status value={s.status} /></td>

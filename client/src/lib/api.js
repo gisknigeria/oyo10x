@@ -65,12 +65,11 @@ export async function publicRequest(path, options = {}) {
   return data;
 }
 
-/** Trigger a CSV download through the authenticated endpoint. */
-export async function downloadCsv(path, filename) {
-  const res = await fetch(API_BASE + '/api' + path, {
-    headers: { Authorization: 'Bearer ' + getToken() },
-  });
-  if (!res.ok) throw new Error('Export failed');
+async function triggerCsvDownload(res, filename) {
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Export failed');
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -80,6 +79,24 @@ export async function downloadCsv(path, filename) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Trigger a CSV download through the authenticated GET endpoint. */
+export async function downloadCsv(path, filename) {
+  const res = await fetch(API_BASE + '/api' + path, {
+    headers: { Authorization: 'Bearer ' + getToken() },
+  });
+  await triggerCsvDownload(res, filename);
+}
+
+/** Trigger a CSV download through an authenticated POST (for exports that also change data). */
+export async function downloadCsvPost(path, body, filename) {
+  const res = await fetch(API_BASE + '/api' + path, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  await triggerCsvDownload(res, filename);
 }
 
 export const naira = (n) =>
