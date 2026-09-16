@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, num, LEVEL_LABEL } from '../lib/api.js';
+import { api, num, LEVEL_LABEL, isCandidateRole } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Submissions from './Submissions.jsx';
