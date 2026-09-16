@@ -204,7 +204,8 @@ export default function App() {
   }
 
   const isAdmin = me.permissions.is_admin;
-  const isGovernorCandidate = isCandidateRole(me.user.role) && me.user.office === 'Governor';
+  const isCandidate = isCandidateRole(me.user.role);
+  const isGovernorCandidate = isCandidate && me.user.office === 'Governor';
   const isField = ['unit_promoter', 'mobiliser', 'grassroot'].includes(normalizeRole(me.user.role));
 
   return (
