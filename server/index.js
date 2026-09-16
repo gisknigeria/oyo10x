@@ -132,7 +132,7 @@ function memberScope(user) {
 // A Mobiliser promoted to Coordinator
 // supervises their ward/LGA -- see /api/users/:id/coordinator.
 function canRegisterLevels(user) {
-  if (ADMIN_ROLES.has(user.role) || user.role === 'candidate') {
+  if (ADMIN_ROLES.has(user.role) || user.role === 'candidate' || user.role === 'mobiliser') {
     return ['mobiliser'];
   }
   return [];
@@ -687,6 +687,9 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   if (req.query.lga) { where.push('lga = ?'); params.push(req.query.lga); }
   if (req.query.ward) { where.push('ward = ?'); params.push(req.query.ward); }
   if (req.query.level) { where.push('level = ?'); params.push(req.query.level); }
+  // Self-service views (e.g. "my nominees") -- narrower than the caller's
+  // full geographic scope, which can span many people they did not add.
+  if (req.query.mine === '1') { where.push('upline_user_id = ?'); params.push(req.user.id); }
   if (req.query.q) {
     where.push('(first_name LIKE ? OR last_name LIKE ? OR phone LIKE ? OR code LIKE ? OR polling_unit LIKE ?)');
     const like = '%' + req.query.q + '%';

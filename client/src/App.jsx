@@ -14,6 +14,7 @@ import Tasks from './pages/Tasks.jsx';
 import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
 import Compliance from './pages/Compliance.jsx';
+import MyNominations from './pages/MyNominations.jsx';
 import PublicRegistration from './pages/PublicRegistration.jsx';
 import Profile from './pages/Profile.jsx';
 
@@ -23,7 +24,8 @@ export const useAuth = () => useContext(AuthContext);
 const NAV = [
   { group: 'Programme' },
   { to: '/', label: 'Dashboard', icon: '▤', end: true },
-  { to: '/network', label: 'My 10X network', icon: '⑃' },
+  { to: '/network', label: 'My 10X network', icon: '⑃', needs: 'network' },
+  { to: '/my-nominations', label: 'My nominations', icon: '⚑', needs: 'candidate' },
   { to: '/profile', label: 'My profile', icon: '●' },
   { group: 'Field work' },
   { to: '/register', label: 'Register network', icon: '＋', needs: 'register' },
@@ -41,6 +43,7 @@ function Shell({ children }) {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const isAdmin = me.permissions.is_admin;
+  const isCandidate = me.user.role === 'candidate';
   const canRegister = me.permissions.can_register_levels.length > 0;
   const canReview = me.permissions.can_review;
   const canSeeCompliance = me.permissions.can_see_compliance;
@@ -50,6 +53,8 @@ function Shell({ children }) {
     if (item.needs === 'register' && !canRegister) return false;
     if (item.needs === 'review' && !canReview) return false;
     if (item.needs === 'compliance' && !canSeeCompliance) return false;
+    if (item.needs === 'network' && isCandidate) return false;
+    if (item.needs === 'candidate' && !isCandidate) return false;
     return true;
   });
 
@@ -196,7 +201,9 @@ export default function App() {
       <Shell>
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/network" element={<Network />} />
+          {me.user.role !== 'candidate' && <Route path="/network" element={<Network />} />}
+          {me.user.role === 'candidate'
+            && <Route path="/my-nominations" element={<MyNominations />} />}
           <Route path="/profile" element={<Profile />} />
           <Route path="/register" element={<RegisterMember />} />
           <Route path="/members/:id" element={<MemberDetail />} />

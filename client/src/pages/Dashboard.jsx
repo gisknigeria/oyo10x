@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, num, pct, timeAgo, LEVEL_LABEL } from '../lib/api.js';
-import { Card, Stat, Status, Loading, Empty, Bar, Alert, Field } from '../components/ui.jsx';
+import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Verification from './Verification.jsx';
 import OperationalReport from '../components/OperationalReport.jsx';
@@ -162,118 +162,30 @@ function SurveyDesk({ surveys = [], notifications = [] }) {
   );
 }
 
-function NominationTracker({ me }) {
+function NominationPointer({ me }) {
   const nomination = me.nomination;
   if (!nomination) return null; // Governor/Deputy Governor carry no quota
 
-  const percent = nomination.quota ? Math.min(100, (nomination.count / nomination.quota) * 100) : 0;
-
   return (
     <div style={{ marginBottom: 16 }}>
-      <Card title="Unit Promoter nominations"
-            note="Required by the Campaign Council directive of 9 September 2026">
-        <div className="grid grid-2" style={{ gap: 20, alignItems: 'center' }}>
-          <div>
-            <div style={{ fontSize: 34, fontWeight: 700, lineHeight: 1,
-                          color: nomination.complete ? 'var(--green-700)' : 'var(--ink-900)' }}>
-              {nomination.count}
-              <span style={{ fontSize: 17, color: 'var(--ink-500)', fontWeight: 500 }}>
-                {' '}of {nomination.quota} nominated
+      <Card bodyClass="">
+        <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>
+              Unit Promoter nominations:{' '}
+              <span style={{ color: nomination.complete ? 'var(--green-700)' : 'var(--amber-600)' }}>
+                {nomination.count} of {nomination.quota}
               </span>
             </div>
-            <div className="progress" style={{ marginTop: 10 }}>
-              <div className={'progress-bar' + (nomination.complete ? '' : ' warn')}
-                   style={{ width: percent + '%' }} />
-            </div>
-            <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+            <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
               {nomination.complete
                 ? 'Requirement complete.'
-                : nomination.remaining + ' more nomination(s) needed to meet your quota.'}
+                : nomination.remaining + ' more needed — plus your disparities & challenges report,'
+                  + ' due 16 September 2026.'}
             </div>
           </div>
-          <div>
-            {nomination.complete ? (
-              <Alert type="success">
-                You have nominated the required number of Unit Promoters.
-              </Alert>
-            ) : (
-              <Alert type="warn">
-                Nominate {nomination.remaining} more Unit Promoter{nomination.remaining === 1 ? '' : 's'} —
-                with LGA, Ward, Polling Unit, PVC number and account details for each.
-              </Alert>
-            )}
-            <Link className="btn" to="/register" style={{ marginTop: 10 }}>
-              Nominate a Unit Promoter
-            </Link>
-          </div>
+          <Link className="btn" to="/my-nominations">Manage nominations</Link>
         </div>
-      </Card>
-    </div>
-  );
-}
-
-function DisparityReportForm() {
-  const [report, setReport] = useState(undefined); // undefined = loading, null = none yet
-  const [disparities, setDisparities] = useState('');
-  const [challenges, setChallenges] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    api.get('/disparity-report').then((d) => {
-      setReport(d.report);
-      setDisparities(d.report?.disparities || '');
-      setChallenges(d.report?.challenges || '');
-    }).catch((e) => setError(e.message));
-  }, []);
-
-  const submit = async () => {
-    setBusy(true); setError(''); setSaved(false);
-    try {
-      const d = await api.post('/disparity-report', { disparities, challenges });
-      setReport(d.report);
-      setSaved(true);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
-  if (report === undefined) return null;
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <Card title="Report disparities & challenges"
-            note="Required by the Campaign Council directive — due 16 September 2026">
-        {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
-        {saved && (
-          <Alert type="success" onClose={() => setSaved(false)}>
-            Submitted. The Campaign Council can now see this.
-          </Alert>
-        )}
-        {report?.reviewed_at && (
-          <Alert type="info">
-            Reviewed by leadership{report.review_note ? ': "' + report.review_note + '"' : '.'}
-          </Alert>
-        )}
-        <Field label="Party / candidate disparities"
-               hint="Issues relating to disparities between the party and its candidates, or anything else affecting your campaign's effectiveness">
-          <textarea value={disparities} onChange={(e) => setDisparities(e.target.value)}
-                    rows={4} placeholder="Describe the disparities affecting your campaign..." />
-        </Field>
-        <Field label="Challenges in your constituency"
-               hint="Challenges confronting you, in enough detail for the Council to assess and intervene">
-          <textarea value={challenges} onChange={(e) => setChallenges(e.target.value)}
-                    rows={4} placeholder="Describe the challenges you're facing..." />
-        </Field>
-        <button className="btn" onClick={submit}
-                disabled={busy || (!disparities.trim() && !challenges.trim())}>
-          {busy && <span className="spinner" />} {report ? 'Update submission' : 'Submit to Campaign Council'}
-        </button>
-        {report?.updated_at && (
-          <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-            Last updated {timeAgo(report.updated_at)}
-          </div>
-        )}
       </Card>
     </div>
   );
@@ -291,8 +203,7 @@ function CandidateDashboard({ data, me }) {
         title="Constituency command centre"
         note={'Your view covers ' + (me.user.scope_value || 'the full state') + '. Track growth, reviews, and field activity from here.'}
       />
-      <NominationTracker me={me} />
-      <DisparityReportForm />
+      <NominationPointer me={me} />
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total Unit Promoters" value={num(levels.mobiliser || 0)} accent
           foot={num(totals.total) + ' total people under your scope'} progress={pct(levels.mobiliser || 0, totals.total)} />
