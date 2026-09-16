@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { api } from '../lib/api.js';
+import { api, normalizeRole } from '../lib/api.js';
 import { Alert, Card, Field } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
@@ -36,19 +36,24 @@ export default function Profile() {
 
   return (
     <div className="grid grid-2">
-      <Card title="Profile" note="Update your username and contact details. Your name and role are managed by an administrator.">
+      <Card title="Profile" note="Update your contact details. Your name, role, and candidate username are managed by the programme office.">
         {message && <Alert type="success">{message}</Alert>}
         {error && <Alert type="error">{error}</Alert>}
         <form onSubmit={saveProfile}>
           <Field label="Full name"><input value={me.user.full_name} disabled /></Field>
           <Field label="Role"><input value={me.user.office || me.user.role} disabled /></Field>
-          <Field label="Username" required hint="Lowercase letters, numbers, dots, hyphens and underscores">
-            <input value={profile.username} onChange={(e) => setProfile({ ...profile, username: e.target.value })} />
+          <Field label="Username" hint={normalizeRole(me.user.role) === 'candidate'
+            ? 'Generated automatically from office and constituency'
+            : 'Lowercase letters, numbers, dots, hyphens and underscores'}>
+            <input value={profile.username} disabled={normalizeRole(me.user.role) === 'candidate'}
+              onChange={(e) => setProfile({ ...profile, username: e.target.value })} />
           </Field>
           <Field label="Phone number">
             <input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} />
           </Field>
-          <button className="btn" disabled={busy || !profile.username.trim()}>Save profile</button>
+          <button className="btn" disabled={busy || (normalizeRole(me.user.role) !== 'candidate' && !profile.username.trim())}>
+            Save profile
+          </button>
         </form>
       </Card>
 

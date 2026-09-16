@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, num, pct, timeAgo, LEVEL_LABEL } from '../lib/api.js';
+import { api, num, pct, timeAgo, LEVEL_LABEL, isCandidateRole, normalizeRole } from '../lib/api.js';
 import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Verification from './Verification.jsx';
 import OperationalReport from '../components/OperationalReport.jsx';
 
-const FIELD_ROLES = new Set(['mobiliser']);
+const FIELD_ROLES = new Set(['unit_promoter', 'mobiliser', 'grassroot']);
 
 function DashboardHeading({ title, note }) {
   return (
@@ -191,6 +191,182 @@ function NominationPointer({ me }) {
   );
 }
 
+function CandidateNominationTracker({ rows = [] }) {
+  if (!rows.length) {
+    return (
+      <Card title="Candidate nomination tracker" note="No candidates currently mapped to this quota requirement">
+        <Empty title="No nomination records yet" />
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Candidate nomination tracker" note="Live progress for each candidate against the nominee quota" bodyClass="">
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Candidate</th>
+              <th>Office</th>
+              <th className="num">Nominated</th>
+              <th className="num">Remaining</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}>
+                <td style={{ fontWeight: 600 }}>{row.full_name || row.username}</td>
+                <td>{row.office}</td>
+                <td className="num">{row.count} / {row.quota}</td>
+                <td className="num">{row.remaining}</td>
+                <td>
+                  {row.complete ? (
+                    <span className="badge green">Complete</span>
+                  ) : (
+                    <span className="badge amber">In progress</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function NumbersDashboard({ data, me }) {
+  const counts = data.platform_counts || {};
+  const byLga = data.by_lga || [];
+  const byWard = data.by_ward || [];
+  const coverage = data.coverage || {};
+
+  return (
+    <>
+      <DashboardHeading
+        title={normalizeRole(me.user.role) === 'campaign_admin'
+          ? 'DG numbers dashboard' : 'Governor numbers dashboard'}
+        note="Programme totals and geographic coverage at a glance."
+      />
+      <div className="grid grid-5" style={{ marginBottom: 16 }}>
+        <Stat label="Candidates" value={num(counts.candidates)} accent />
+        <Stat label="Nominees" value={num(counts.nominees)} />
+        <Stat label="Grassroots" value={num(counts.grassroots)} />
+        <Stat label="Wards covered" value={num(coverage.wards)} />
+        <Stat label="LGAs covered" value={num(coverage.lgas)} />
+        <Stat label="Polling units covered" value={num(coverage.units)} />
+        <Stat label="Total accounts" value={num(counts.total)} />
+      </div>
+
+      <div className="grid grid-2">
+        <Card title="Coverage by LGA" note="Registered people, verified records, wards, and polling units" bodyClass="">
+          {byLga.length === 0 ? <Empty title="No LGA coverage yet" /> : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>LGA</th><th className="num">People</th><th className="num">Wards</th><th className="num">Units</th></tr></thead>
+                <tbody>{byLga.map((row) => (
+                  <tr key={row.lga}>
+                    <td style={{ fontWeight: 600 }}>{row.lga}</td>
+                    <td className="num">{num(row.total)}</td>
+                    <td className="num">{num(row.wards)}</td>
+                    <td className="num">{num(row.units)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+
+        <Card title="Coverage by ward" note="Ward-level registration totals" bodyClass="">
+          {byWard.length === 0 ? <Empty title="No ward coverage yet" /> : (
+            <div className="table-wrap" style={{ maxHeight: 420, overflowY: 'auto' }}>
+              <table>
+                <thead><tr><th>LGA</th><th>Ward</th><th className="num">People</th><th className="num">Units</th></tr></thead>
+                <tbody>{byWard.map((row) => (
+                  <tr key={row.lga + row.ward}>
+                    <td>{row.lga}</td>
+                    <td style={{ fontWeight: 600 }}>{row.ward}</td>
+                    <td className="num">{num(row.total)}</td>
+                    <td className="num">{num(row.units)}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+    </>
+  );
+}
+
+function CampaignAdminDashboard({ data, me, users = [] }) {
+  const [nominations, setNominations] = useState([]);
+
+  useEffect(() => {
+    api.get('/nominations').then((d) => setNominations(d.rows || [])).catch(() => setNominations([]));
+  }, []);
+
+  const counts = users.reduce((acc, user) => {
+    const role = normalizeRole(user.role);
+    if (role === 'candidate') acc.candidate += 1;
+    if (role === 'unit_promoter' || role === 'mobiliser') acc.unit_promoter += 1;
+    if (role === 'grassroot') acc.grassroot += 1;
+    acc.total += 1;
+    return acc;
+  }, { candidate: 0, unit_promoter: 0, grassroots: 0, total: 0, grassroot: 0 });
+  const totalPeople = data?.totals?.total || 0;
+  const nominationCoverage = data?.by_level?.find((entry) => entry.level === 'mobiliser')?.n || 0;
+
+  return (
+    <>
+      <DashboardHeading
+        title="DG command dashboard"
+        note="Track candidate activation, nominee coverage, grassroots reach, and total programme accounts from one place."
+      />
+      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+        <Stat label="Candidates added" value={num(counts.candidate)} accent
+          foot={num(totalPeople) + ' total people in view'} />
+        <Stat label="Nominees / Unit Promoters" value={num(Math.max(counts.unit_promoter, nominationCoverage))}
+          foot="Accounts and field nominees in the network" />
+        <Stat label="Grassroots" value={num(counts.grassroot)}
+          foot="Community-level platform accounts" />
+        <Stat label="Total accounts" value={num(counts.total)}
+          foot="All active accounts currently on the platform" />
+      </div>
+
+      <div className="grid grid-2" style={{ marginBottom: 16 }}>
+        <Card title="Add to the platform" note="Quick entry for the next wave of candidates and nominees">
+          <div className="pill-row" style={{ marginBottom: 12 }}>
+            <Link className="pill active" to="/register?level=candidate">Add candidate</Link>
+            <Link className="pill" to="/register?level=unit_promoter">Add nominee</Link>
+          </div>
+          <div className="muted" style={{ marginBottom: 10 }}>
+            Candidates and nominees can be added one by one or in bulk from the member registration page.
+          </div>
+          <div className="btn-row">
+            <Link className="btn" to="/register?level=candidate">Add candidate</Link>
+            <Link className="btn secondary" to="/register?level=unit_promoter">Add nominee</Link>
+          </div>
+        </Card>
+
+        <Card title="Coverage snapshot" note="Current network totals and platform scope">
+          <Bar label="Candidates" value={counts.candidate || 0} max={Math.max(counts.candidate || 0, 10)} display={num(counts.candidate || 0)} />
+          <Bar label="Nominees" value={Math.max(counts.unit_promoter, nominationCoverage)} max={Math.max(Math.max(counts.unit_promoter, nominationCoverage), 10)} display={num(Math.max(counts.unit_promoter, nominationCoverage))} />
+          <Bar label="Grassroots" value={counts.grassroot || 0} max={Math.max(counts.grassroot || 0, 10)} display={num(counts.grassroot || 0)} />
+        </Card>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <CandidateNominationTracker rows={nominations} />
+      </div>
+
+      <OperationalReport data={data} isAdmin={me.permissions.is_admin} />
+      <SurveyDesk surveys={data.survey_tasks || []} notifications={data.survey_notifications || []} />
+    </>
+  );
+}
+
 function CandidateDashboard({ data, me }) {
   const { totals, coverage, targets, by_level, by_lga, by_ward, recent, tasks, submissions,
     survey_tasks, survey_notifications } = data;
@@ -204,8 +380,10 @@ function CandidateDashboard({ data, me }) {
         note={'Your view covers ' + (me.user.scope_value || 'the full state') + '. Track growth, reviews, and field activity from here.'}
       />
       <NominationPointer me={me} />
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="Total Unit Promoters" value={num(levels.mobiliser || 0)} accent
+      <div className="grid grid-5" style={{ marginBottom: 16 }}>
+        <Stat label="Nomination quota" value={me.nomination ? me.nomination.quota : 0} accent
+          foot={me.nomination ? me.nomination.count + ' already nominated' : 'No quota for this office'} />
+        <Stat label="Total Unit Promoters" value={num(levels.mobiliser || 0)}
           foot={num(totals.total) + ' total people under your scope'} progress={pct(levels.mobiliser || 0, totals.total)} />
         <Stat label="People under your scope" value={num(totals.total)}
           foot={num(totals.pending) + ' awaiting review'} progress={pct(totals.verified, totals.total)} />
@@ -225,12 +403,12 @@ function CandidateDashboard({ data, me }) {
         </Card>
         <Card title="Next actions" note="Keep the network moving">
           <div className="btn-row" style={{ marginBottom: 12 }}>
-            <Link className="btn" to="/register">Register a member</Link>
+            <Link className="btn" to="/register?level=unit_promoter">Add nominee</Link>
             <Link className="btn secondary" to="/tasks">View tasks</Link>
           </div>
           <Alert type="info">
             {pendingReview ? 'Review pending submissions so approved work can release points.'
-              : 'Keep registering Unit Promoters across your assigned area.'}
+              : 'Candidates can only add nominees in their assigned area.'}
           </Alert>
         </Card>
       </div>
@@ -243,7 +421,7 @@ function CandidateDashboard({ data, me }) {
 }
 
 function FieldDashboard({ data, me }) {
-  const { totals, coverage, by_level, recent, tasks } = data;
+  const { totals, coverage, by_level, recent, people_added, tasks } = data;
   const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const nextLevel = me.permissions.can_register_levels[0];
   const areaLabel = 'Assigned polling unit';
@@ -254,7 +432,7 @@ function FieldDashboard({ data, me }) {
     <>
       <DashboardHeading
         title="Your field dashboard"
-        note={'Focused on ' + (me.user.scope_value || 'your assigned network') + '. Add people, complete tasks, and watch verification status.'}
+        note={'Focused on ' + (me.user.scope_value || 'your assigned network') + '. Add Grassroots, complete tasks, and watch verification status.'}
       />
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Your registrations" value={num(totals.total)} accent
@@ -275,7 +453,7 @@ function FieldDashboard({ data, me }) {
         </Card>
         <Card title="Today’s work" note="The quickest way to make progress">
           <div className="btn-row" style={{ marginBottom: 12 }}>
-            {nextLevel && <Link className="btn" to="/register">Add {LEVEL_LABEL[nextLevel] || nextLevel}</Link>}
+            {nextLevel && <Link className="btn" to="/register">Add Grassroot</Link>}
             <Link className="btn secondary" to="/tasks">View tasks</Link>
           </div>
           <Alert type="info">
@@ -283,14 +461,16 @@ function FieldDashboard({ data, me }) {
           </Alert>
         </Card>
       </div>
-      <RecentRegistrations rows={recent} />
+      <RecentRegistrations rows={people_added || recent}
+                           title="People you added"
+                           note="Grassroots registered directly by you" />
     </>
   );
 }
 
-function RecentRegistrations({ rows }) {
+function RecentRegistrations({ rows, title = 'Recent registrations', note }) {
   return (
-    <Card title="Recent registrations" bodyClass="">
+    <Card title={title} note={note} bodyClass="">
       {rows.length === 0 ? <Empty title="Nothing registered yet" /> : (
         <div className="table-wrap">
           <table>
@@ -344,11 +524,15 @@ export default function Dashboard() {
   const { me } = useAuth();
   const [data, setData] = useState(null);
   const [activity, setActivity] = useState(null);
+  const [users, setUsers] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
     api.get('/dashboard').then(setData).catch((e) => setError(e.message));
-    if (me.permissions.is_admin) api.get('/admin/audit').then((d) => setActivity(d.rows)).catch(() => setActivity([]));
+    if (me.permissions.is_admin) {
+      api.get('/users').then((d) => setUsers(d.rows || [])).catch(() => setUsers([]));
+      api.get('/admin/audit').then((d) => setActivity(d.rows)).catch(() => setActivity([]));
+    }
   }, [me.permissions.is_admin]);
 
   if (error) return <Alert type="error">{error}</Alert>;
@@ -360,8 +544,10 @@ export default function Dashboard() {
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
   const verifyRate = pct(totals.verified, totals.total);
 
-  if (me.user.role === 'candidate') return <CandidateDashboard data={data} me={me} />;
-  if (FIELD_ROLES.has(me.user.role)) return <FieldDashboard data={data} me={me} />;
+  if (normalizeRole(me.user.role) === 'campaign_admin') return <NumbersDashboard data={data} me={me} />;
+  if (isCandidateRole(me.user.role) && me.user.office === 'Governor') return <NumbersDashboard data={data} me={me} />;
+  if (isCandidateRole(me.user.role)) return <CandidateDashboard data={data} me={me} />;
+  if (FIELD_ROLES.has(normalizeRole(me.user.role))) return <FieldDashboard data={data} me={me} />;
 
   return (
     <>

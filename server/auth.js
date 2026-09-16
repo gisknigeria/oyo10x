@@ -65,17 +65,45 @@ export async function authenticate(req, res, next) {
   next();
 }
 
-export const ADMIN_ROLES = new Set(['superadmin', 'admin']);
+export const ROLE_ALIASES = Object.freeze({
+  superadmin: 'superadmin',
+  admin: 'admin',
+  campaign_admin: 'campaign_admin',
+  'campaign administrator': 'campaign_admin',
+  dg: 'campaign_admin',
+  'd.g.': 'campaign_admin',
+  'd.g': 'campaign_admin',
+  candidate: 'candidate',
+  mobiliser: 'unit_promoter',
+  'unit promoter': 'unit_promoter',
+  unit_promoter: 'unit_promoter',
+  grassroots: 'grassroot',
+  grassroot: 'grassroot',
+  'grass root': 'grassroot',
+});
+
+export function normaliseRole(role) {
+  const raw = String(role ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (ROLE_ALIASES[raw]) return ROLE_ALIASES[raw];
+  return raw.replace(/[.\s-]+/g, '_');
+}
+
+export const ADMIN_ROLES = new Set(['superadmin', 'admin', 'campaign_admin']);
+export const UNIT_PROMOTER_ROLES = new Set(['unit_promoter', 'mobiliser']);
+export const isUnitPromoterRole = (role) => UNIT_PROMOTER_ROLES.has(normaliseRole(role));
+export const isCandidateRole = (role) => normaliseRole(role) === 'candidate';
+export const isGrassrootRole = (role) => normaliseRole(role) === 'grassroot';
 
 export function requireRole(...roles) {
-  const allowed = new Set(roles);
+  const allowed = new Set(roles.map((r) => normaliseRole(r)));
   return (req, res, next) =>
-    allowed.has(req.user.role) ? next()
+    allowed.has(normaliseRole(req.user.role)) ? next()
       : res.status(403).json({ error: 'You do not have access to this action' });
 }
 
 export const requireAdmin = (req, res, next) =>
-  ADMIN_ROLES.has(req.user.role) ? next()
+  ADMIN_ROLES.has(normaliseRole(req.user.role)) ? next()
     : res.status(403).json({ error: 'Administrator access required' });
 
 export async function touchLogin(id) {

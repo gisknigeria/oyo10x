@@ -33,7 +33,7 @@ function NominationTracker({ nomination, onNominated }) {
             <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
               {nomination.complete
                 ? 'Requirement complete.'
-                : nomination.remaining + ' more nomination(s) needed to meet your quota.'}
+                : nomination.remaining + ' more nomination(s) needed to meet your quota of ' + nomination.quota + '.'}
             </div>
           </div>
           <div>
@@ -44,7 +44,7 @@ function NominationTracker({ nomination, onNominated }) {
             ) : (
               <Alert type="warn">
                 Nominate {nomination.remaining} more Unit Promoter{nomination.remaining === 1 ? '' : 's'} —
-                with LGA, Ward, Polling Unit, PVC number and account details for each.
+                location and payment details can be added when available.
               </Alert>
             )}
           </div>
@@ -54,12 +54,13 @@ function NominationTracker({ nomination, onNominated }) {
   );
 }
 
-function AddNomineeForm({ geo, onAdded }) {
+function AddNomineeForm({ geo, onAdded, remaining = 0, quota = 0 }) {
   const [form, setForm] = useState(BLANK);
   const [gps, setGps] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  const quotaReached = quota > 0 && remaining <= 0;
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -77,11 +78,14 @@ function AddNomineeForm({ geo, onAdded }) {
 
   const wards = geo.wards[form.lga] || [];
   const pollingUnits = (geo.polling_units?.[form.lga]?.[form.ward]) || [];
-  const required = ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit'];
-  const ready = required.every((k) => String(form[k] || '').trim());
+  const ready = ['first_name', 'last_name', 'phone'].every((k) => String(form[k] || '').trim());
 
   const submit = async (e) => {
     e.preventDefault();
+    if (quotaReached) {
+      setError('Your nominee quota is full. You cannot add any more Unit Promoters.');
+      return;
+    }
     setBusy(true); setError(''); setResult(null);
     try {
       const res = await api.post('/members', { ...form, level: 'mobiliser', ...(gps || {}) });
@@ -98,6 +102,16 @@ function AddNomineeForm({ geo, onAdded }) {
   return (
     <Card title="Add a nominee"
           note="Every nominee gets their own login automatically, shown once below">
+      <div className="hint" style={{ marginBottom: 12 }}>
+        <span className="badge blue">
+          {quotaReached ? 'Quota reached' : remaining + ' remaining'}
+        </span>
+        <span style={{ marginLeft: 8 }}>
+          {quotaReached
+            ? 'You have reached your nominee limit for this office.'
+            : 'You can still add ' + remaining + ' more nominee' + (remaining === 1 ? '' : 's') + '.'}
+        </span>
+      </div>
       {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
       {result && (
         <Alert type="success" title="Nominee added. " onClose={() => setResult(null)}>
@@ -130,19 +144,19 @@ function AddNomineeForm({ geo, onAdded }) {
           </Field>
         </div>
         <div className="grid grid-3">
-          <Field label="LGA" required>
+          <Field label="LGA">
             <select value={form.lga} onChange={set('lga')}>
               <option value="">Select an LGA</option>
               {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
             </select>
           </Field>
-          <Field label="Ward" required>
+          <Field label="Ward">
             <select value={form.ward} onChange={set('ward')} disabled={!form.lga}>
               <option value="">Select a ward</option>
               {wards.map((w) => <option key={w} value={w}>{w}</option>)}
             </select>
           </Field>
-          <Field label="Polling unit" required>
+          <Field label="Polling unit">
             <select value={form.polling_unit}
                     onChange={(e) => setForm((f) => ({ ...f, polling_unit: e.target.value }))}
                     disabled={!form.ward}>
@@ -171,9 +185,9 @@ function AddNomineeForm({ geo, onAdded }) {
           <input type="text" value={form.account_name} onChange={set('account_name')} />
         </Field>
 
-        <button className="btn" disabled={!ready || busy}>
+        <button className="btn" disabled={!ready || busy || quotaReached}>
           {busy && <span className="spinner" />}
-          {busy ? 'Saving' : 'Add nominee'}
+          {busy ? 'Saving' : quotaReached ? 'Quota reached' : 'Add nominee'}
         </button>
       </form>
     </Card>
@@ -327,7 +341,12 @@ export default function MyNominations() {
         <Stat label="Rejected" value={num(nominees.filter((n) => n.status === 'rejected').length)} />
       </div>
 
-      <AddNomineeForm geo={geo} onAdded={onAdded} />
+      <AddNomineeForm
+        geo={geo}
+        onAdded={onAdded}
+        remaining={me.nomination ? me.nomination.remaining : 0}
+        quota={me.nomination ? me.nomination.quota : 0}
+      />
       <MyNomineesList rows={nominees} />
       <DisparityReportForm />
     </>

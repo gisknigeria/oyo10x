@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
-import { api, getToken, clearToken, ROLE_LABEL } from './lib/api.js';
+import { api, getToken, clearToken, ROLE_LABEL, isCandidateRole, isUnitPromoterRole, normalizeRole } from './lib/api.js';
 import { Loading } from './components/ui.jsx';
 import { Crest, CAMPAIGN } from './components/Brand.jsx';
 
@@ -11,6 +11,7 @@ import RegisterMember from './pages/RegisterMember.jsx';
 import MemberDetail from './pages/MemberDetail.jsx';
 import Network from './pages/Network.jsx';
 import Tasks from './pages/Tasks.jsx';
+import FieldWork from './pages/FieldWork.jsx';
 import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
 import Compliance from './pages/Compliance.jsx';
@@ -29,13 +30,13 @@ const NAV = [
   { to: '/profile', label: 'My profile', icon: '●' },
   { group: 'Field work' },
   { to: '/register', label: 'Register network', icon: '＋', needs: 'register' },
-  { to: '/tasks', label: 'Tasks', icon: '✓' },
+  { to: '/tasks', label: 'Tasks & reports', icon: '✓' },
   { group: 'Performance' },
   { to: '/payroll', label: 'Points & payment', icon: '₦' },
   { group: 'Administration', admin: true },
-  { to: '/users', label: 'Logins', icon: '⚿', admin: true },
+  { to: '/users', label: 'Platform accounts', icon: '⚿', admin: true },
   { group: 'Oversight', needs: 'compliance' },
-  { to: '/compliance', label: 'Nominations & reports', icon: '⚑', needs: 'compliance' },
+  { to: '/compliance', label: 'Reports & challenges', icon: '⚑', needs: 'compliance' },
 ];
 
 function Shell({ children }) {
@@ -43,20 +44,26 @@ function Shell({ children }) {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const isAdmin = me.permissions.is_admin;
-  const isCandidate = me.user.role === 'candidate';
+  const isCandidate = isCandidateRole(me.user.role);
+  const isField = ['unit_promoter', 'mobiliser', 'grassroot'].includes(normalizeRole(me.user.role));
+  const isGovernorCandidate = isCandidate && me.user.office === 'Governor';
   const canRegister = me.permissions.can_register_levels.length > 0;
   const canReview = me.permissions.can_review;
   const canSeeCompliance = me.permissions.can_see_compliance;
 
   const visible = NAV.filter((item) => {
+    if (isAdmin && item.to && ['/network', '/register', '/payroll'].includes(item.to)) return false;
+    if (isField && item.to && !['/', '/tasks', '/profile'].includes(item.to)) return false;
+    if (isGovernorCandidate && item.to && item.to !== '/' && item.to !== '/profile') return false;
     if (item.admin && !isAdmin) return false;
-    if (item.needs === 'register' && !canRegister) return false;
+    if (item.needs === 'register' && (!canRegister || isCandidate)) return false;
     if (item.needs === 'review' && !canReview) return false;
     if (item.needs === 'compliance' && !canSeeCompliance) return false;
     if (item.needs === 'network' && isCandidate) return false;
     if (item.needs === 'candidate' && !isCandidate) return false;
+    if (item.to === '/register' && isCandidate) return false;
     return true;
-  });
+  }).filter((item, index, items) => !item.group || items[index + 1]?.to);
 
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
 
@@ -82,14 +89,15 @@ function Shell({ children }) {
           ) : (
             <NavLink key={item.to} to={item.to} end={item.end}
               className={({ isActive }) => (isActive ? 'active' : '')}>
-              <span className="nav-icon">{item.icon}</span>{item.label}
+              <span className="nav-icon">{item.icon}</span>
+              {item.to === '/register' && isCandidate ? 'Add nominee' : item.label}
             </NavLink>
           ))}
         </nav>
         <div className="sidebar-foot">
           <div className="sidebar-user">{me.user.full_name}</div>
           <div className="sidebar-role">
-            {me.user.office || ROLE_LABEL[me.user.role] || me.user.role}
+            {me.user.office || ROLE_LABEL[normalizeRole(me.user.role)] || me.user.role}
           </div>
           <button className="signout" onClick={signOut}>Sign out</button>
         </div>
@@ -116,7 +124,7 @@ function Shell({ children }) {
               <span>{CAMPAIGN.tagline}</span>
             </div>
             <span className="badge green">
-              <span className="dot" />{ROLE_LABEL[me.user.role] || me.user.role}
+              <span className="dot" />{ROLE_LABEL[normalizeRole(me.user.role)] || me.user.role}
             </span>
           </div>
         </header>
@@ -140,7 +148,8 @@ function Shell({ children }) {
               onClick={() => setMobileNavOpen(false)}
               className={({ isActive }) => (isActive ? 'active' : '')}
             >
-              <span className="nav-icon">{item.icon}</span>{item.label}
+              <span className="nav-icon">{item.icon}</span>
+              {item.to === '/register' && isCandidate ? 'Add nominee' : item.label}
             </NavLink>
           ))}
           <button className="signout mobile-signout" onClick={signOut}>Sign out</button>
@@ -195,20 +204,23 @@ export default function App() {
   }
 
   const isAdmin = me.permissions.is_admin;
+  const isGovernorCandidate = isCandidateRole(me.user.role) && me.user.office === 'Governor';
+  const isField = ['unit_promoter', 'mobiliser', 'grassroot'].includes(normalizeRole(me.user.role));
 
   return (
     <AuthContext.Provider value={{ me, signOut, reload: load }}>
       <Shell>
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          {me.user.role !== 'candidate' && <Route path="/network" element={<Network />} />}
-          {me.user.role === 'candidate'
-            && <Route path="/my-nominations" element={<MyNominations />} />}
+          {!isCandidate && !isField && <Route path="/network" element={<Network />} />}
+          {isCandidate && !isGovernorCandidate && <Route path="/my-nominations" element={<MyNominations />} />}
           <Route path="/profile" element={<Profile />} />
-          <Route path="/register" element={<RegisterMember />} />
-          <Route path="/members/:id" element={<MemberDetail />} />
-          <Route path="/tasks" element={<Tasks />} />
-          <Route path="/payroll" element={<Payroll />} />
+          {!isCandidate && <Route path="/register" element={<RegisterMember />} />}
+          {isCandidate && !isGovernorCandidate && <Route path="/register" element={<Navigate to="/my-nominations" replace />} />}
+          {!isField && <Route path="/members/:id" element={<MemberDetail />} />}
+          {isField ? <Route path="/tasks" element={<FieldWork />} />
+            : !isGovernorCandidate && <Route path="/tasks" element={<Tasks />} />}
+          {!isField && !isGovernorCandidate && <Route path="/payroll" element={<Payroll />} />}
           {isAdmin && <Route path="/users" element={<Users />} />}
           {me.permissions.can_see_compliance
             && <Route path="/compliance" element={<Compliance />} />}

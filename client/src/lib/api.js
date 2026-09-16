@@ -121,9 +121,39 @@ export const LEVEL_LABEL = {
   mobiliser: 'Unit Promoter',
 };
 
+export const ROLE_ALIASES = Object.freeze({
+  superadmin: 'superadmin',
+  admin: 'admin',
+  campaign_admin: 'campaign_admin',
+  'campaign administrator': 'campaign_admin',
+  dg: 'campaign_admin',
+  'd.g.': 'campaign_admin',
+  'd.g': 'campaign_admin',
+  candidate: 'candidate',
+  mobiliser: 'unit_promoter',
+  'unit promoter': 'unit_promoter',
+  unit_promoter: 'unit_promoter',
+  grassroots: 'grassroot',
+  grassroot: 'grassroot',
+  'grass root': 'grassroot',
+});
+
+export const normalizeRole = (role) => {
+  const raw = String(role ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  return ROLE_ALIASES[raw] || raw.replace(/[.\s-]+/g, '_');
+};
+
+export const isCandidateRole = (role) => normalizeRole(role) === 'candidate';
+export const isUnitPromoterRole = (role) => ['unit_promoter', 'mobiliser'].includes(normalizeRole(role));
+
 export const ROLE_LABEL = {
-  superadmin: 'Super Administrator',
-  admin: 'Administrator',
+  superadmin: 'Super Admin',
+  admin: 'Admin',
+  campaign_admin: 'D.G. (Campaign Administrator)',
   candidate: 'Candidate',
+  unit_promoter: 'Unit Promoter',
+  grassroots: 'Grassroot',
+  grassroot: 'Grassroot',
   mobiliser: 'Unit Promoter',
 };

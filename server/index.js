@@ -13,6 +13,7 @@ import { taskReport } from './task-report.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
   requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
+  normaliseRole, isUnitPromoterRole, isCandidateRole, isGrassrootRole,
 } from './auth.js';
 import {
   LGAS, WARDS, POLLING_UNITS, SENATORIAL, FEDERAL, STATE_CONST, BANKS,
@@ -36,8 +37,8 @@ const UPLOAD_DIR = process.env.OYO_UPLOADS || path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
-const VALID_USER_ROLES = new Set(['superadmin', 'admin', 'candidate', 'mobiliser']);
-const LOGIN_CREATION_ROLES = new Set(['admin', 'candidate']);
+const VALID_USER_ROLES = new Set(['superadmin', 'admin', 'campaign_admin', 'candidate', 'unit_promoter', 'grassroot', 'mobiliser']);
+const LOGIN_CREATION_ROLES = new Set(['admin', 'campaign_admin', 'superadmin', 'candidate']);
 // Auth here is a Bearer token in localStorage, never a cookie, so there is no
 // CSRF exposure from allowing cross-origin requests -- this is what makes a
 // split deploy (frontend on Vercel, API on Render) safe without extra
@@ -93,9 +94,9 @@ const draftToken = () => crypto.randomBytes(24).toString('base64url');
  *    geography -- their assigned ward/LGA/constituency/state.
  */
 function memberScope(user) {
-  if (ADMIN_ROLES.has(user.role)) return { sql: '1=1', params: [] };
+  if (ADMIN_ROLES.has(normaliseRole(user.role))) return { sql: '1=1', params: [] };
 
-  if (user.role === 'mobiliser' && !Number(user.is_coordinator)) {
+  if ((isUnitPromoterRole(user.role) || isGrassrootRole(user.role)) && !Number(user.is_coordinator)) {
     return {
       sql: '(id = ? OR upline_user_id = ? OR upline_member_id = ?)',
       params: [user.member_id || -1, user.id, user.member_id || -1],
@@ -132,16 +133,27 @@ function memberScope(user) {
 // A Mobiliser promoted to Coordinator
 // supervises their ward/LGA -- see /api/users/:id/coordinator.
 function canRegisterLevels(user) {
-  if (ADMIN_ROLES.has(user.role) || user.role === 'candidate' || user.role === 'mobiliser') {
-    return ['mobiliser'];
+  if (ADMIN_ROLES.has(normaliseRole(user.role)) || isCandidateRole(user.role)) {
+    return ['unit_promoter'];
   }
+  if (isUnitPromoterRole(user.role) || isGrassrootRole(user.role)) return ['grassroot'];
   return [];
 }
 
 function mobiliserPollingUnit(user) {
-  if (user.role !== 'mobiliser' || Number(user.is_coordinator)) return null;
+  if ((!isUnitPromoterRole(user.role) && !isGrassrootRole(user.role)) || Number(user.is_coordinator)) return null;
   const [lga, ward, pollingUnit] = String(user.scope_value || '').split('|');
   return lga && ward && pollingUnit ? { lga, ward, pollingUnit } : null;
+}
+
+function registrationLocation(user, body) {
+  const own = mobiliserPollingUnit(user);
+  return {
+    ...body,
+    lga: body.lga || own?.lga || 'Not specified',
+    ward: body.ward || own?.ward || 'Not specified',
+    polling_unit: body.polling_unit || own?.pollingUnit || 'Not specified',
+  };
 }
 
 /**
@@ -158,7 +170,7 @@ function resolveMemberForSubmission(user, explicitMemberId) {
 }
 
 function scopedLgas(user) {
-  if (ADMIN_ROLES.has(user.role) || user.scope_type === 'state') return LGAS;
+  if (ADMIN_ROLES.has(normaliseRole(user.role)) || user.scope_type === 'state') return LGAS;
   if (user.scope_type === 'polling_unit') {
     return [String(user.scope_value || '').split('|')[0]].filter(Boolean);
   }
@@ -174,14 +186,25 @@ const NOMINATION_QUOTAS = {
   Senator: 4,
   'House of Representatives': 3,
   'House of Assembly': 3,
+  'Senatorial': 4,
+  'House of Representatives': 3,
+  'State Assembly': 3,
 };
-const nominationQuota = (office) => NOMINATION_QUOTAS[office] || null;
+const nominationQuota = (office) => {
+  if (!office) return null;
+  if (NOMINATION_QUOTAS[office] != null) return NOMINATION_QUOTAS[office];
+  const normalised = String(office).trim();
+  if (normalised.toLowerCase().includes('senator')) return 4;
+  if (normalised.toLowerCase().includes('representative')) return 3;
+  if (normalised.toLowerCase().includes('assembly') || normalised.toLowerCase().includes('house of assembly')) return 3;
+  return null;
+};
 
-const isGovernor = (user) => user.role === 'candidate' && user.office === 'Governor';
+const isGovernor = (user) => isCandidateRole(user.role) && user.office === 'Governor';
 // Who the Council directive says should see nomination progress and the
 // disparities/challenges reports: leadership (admin/superadmin) and the
 // Governor specifically -- not other candidates, who only see their own.
-const canSeeCompliance = (user) => ADMIN_ROLES.has(user.role) || isGovernor(user);
+const canSeeCompliance = (user) => ADMIN_ROLES.has(normaliseRole(user.role)) || isGovernor(user);
 
 async function nominationStatus(candidateUserId, office) {
   const quota = nominationQuota(office);
@@ -213,6 +236,7 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   const { username, password } = req.body || {};
   const user = await db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
     .get(String(username || '').trim());
+  if (user) user.role = normaliseRole(user.role);
 
   if (!user || !verifyPassword(password || '', user.password_hash)) {
     await audit(null, username, 'login_failed', 'user', null, null, ip(req));
@@ -228,19 +252,20 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   res.json({ token: issueToken(user), user });
 }));
 
-const isCoordinator = (user) => !!(user.role === 'mobiliser' && Number(user.is_coordinator));
-const canReview = (user) => ADMIN_ROLES.has(user.role)
-  || user.role === 'candidate' || isCoordinator(user);
+const isCoordinator = (user) => !!(isUnitPromoterRole(user.role) && Number(user.is_coordinator));
+const canReview = (user) => ADMIN_ROLES.has(normaliseRole(user.role))
+  || isCandidateRole(user.role) || isCoordinator(user);
 
 app.get('/api/me', authenticate, wrap(async (req, res) => {
-  const caps = LEVEL_CAPS[req.user.role] || null;
-  const nomination = req.user.role === 'candidate'
+  const role = normaliseRole(req.user.role);
+  const caps = LEVEL_CAPS[role] || LEVEL_CAPS[req.user.role] || null;
+  const nomination = isCandidateRole(role)
     ? await nominationStatus(req.user.id, req.user.office)
     : null;
   res.json({
-    user: req.user,
+    user: { ...req.user, role },
     permissions: {
-      is_admin: ADMIN_ROLES.has(req.user.role),
+      is_admin: ADMIN_ROLES.has(role),
       is_coordinator: isCoordinator(req.user),
       is_governor: isGovernor(req.user),
       can_register_levels: canRegisterLevels(req.user),
@@ -269,16 +294,21 @@ app.post('/api/auth/change-password', authenticate, wrap(async (req, res) => {
 }));
 
 app.patch('/api/auth/profile', authenticate, wrap(async (req, res) => {
-  const username = String(req.body?.username || '').trim().toLowerCase();
+  const isCandidateAccount = isCandidateRole(req.user.role);
+  const username = isCandidateAccount
+    ? req.user.username
+    : String(req.body?.username || '').trim().toLowerCase();
   const phone = String(req.body?.phone || '').trim() || null;
   if (!username) return res.status(400).json({ error: 'Username is required' });
-  if (!/^[a-z0-9._-]+$/.test(username)) {
+  if (!isCandidateAccount && !/^[a-z0-9._-]+$/.test(username)) {
     return res.status(400).json({ error: 'Username may use lowercase letters, numbers, dots, hyphens and underscores' });
   }
-  const existing = await db.prepare(
-    'SELECT id FROM users WHERE LOWER(username) = ? AND id <> ?'
-  ).get(username, req.user.id);
-  if (existing) return res.status(409).json({ error: 'That username is already taken' });
+  if (!isCandidateAccount) {
+    const existing = await db.prepare(
+      'SELECT id FROM users WHERE LOWER(username) = ? AND id <> ?'
+    ).get(username, req.user.id);
+    if (existing) return res.status(409).json({ error: 'That username is already taken' });
+  }
   await db.prepare('UPDATE users SET username = ?, phone = ? WHERE id = ?')
     .run(username, phone, req.user.id);
   await audit(req.user.id, req.user.username, 'profile_updated', 'user', req.user.id, null, ip(req));
@@ -385,7 +415,7 @@ async function registerMemberRow(b, opts) {
     loginUsername, loginPassword,
   } = opts;
 
-  for (const f of ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit']) {
+  for (const f of ['first_name', 'last_name', 'phone']) {
     if (!String(b[f] || '').trim()) {
       return { ok: false, status: 400, error: 'Missing required field: ' + f.replace(/_/g, ' ') };
     }
@@ -402,7 +432,9 @@ async function registerMemberRow(b, opts) {
     bank_name: b.bank_name || null,
     account_number: b.account_number ? String(b.account_number).replace(/\D/g, '') : null,
     account_name: b.account_name || null,
-    lga: b.lga, ward: b.ward, polling_unit: String(b.polling_unit).trim(),
+    lga: b.lga || 'Not specified',
+    ward: b.ward || 'Not specified',
+    polling_unit: String(b.polling_unit || 'Not specified').trim(),
     lat: b.lat ?? null, lng: b.lng ?? null, accuracy: b.accuracy ?? null,
   };
 
@@ -435,7 +467,7 @@ async function registerMemberRow(b, opts) {
   const id = Number(info.lastInsertRowid);
   const password = loginPassword || tempPassword();
   const username = loginUsername || 'member.' + id;
-  const loginRole = 'mobiliser';
+  const loginRole = level === 'grassroot' ? 'grassroot' : 'mobiliser';
   await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,full_name,phone,scope_type,scope_value,member_id,status,created_at) '
     + 'VALUES (?,?,?,?,?,?,?,?,?,?,?)'
@@ -452,20 +484,20 @@ async function registerMemberRow(b, opts) {
 }
 
 app.post('/api/members', authenticate, wrap(async (req, res) => {
-  const b = req.body || {};
+  const b = registrationLocation(req.user, req.body || {});
   const level = b.level || canRegisterLevels(req.user)[0];
 
   if (!canRegisterLevels(req.user).includes(level)) {
     return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
   }
-  if (b.lga && !scopedLgas(req.user).includes(b.lga)) {
+  if (b.lga && b.lga !== 'Not specified' && !scopedLgas(req.user).includes(b.lga)) {
     return res.status(403).json({ error: b.lga + ' is outside your constituency' });
   }
   const ownPollingUnit = mobiliserPollingUnit(req.user);
   if (ownPollingUnit && (b.lga !== ownPollingUnit.lga
       || b.ward !== ownPollingUnit.ward
       || b.polling_unit !== ownPollingUnit.pollingUnit)) {
-    return res.status(403).json({ error: 'Unit Promoters can only register people in their own polling unit' });
+    return res.status(403).json({ error: 'Field users can only register people in their own polling unit' });
   }
 
   const result = await registerMemberRow(b, {
@@ -490,7 +522,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
  * override lga/ward/polling_unit if it needs to.
  */
 app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
-  const b = req.body || {};
+  const b = registrationLocation(req.user, req.body || {});
   const level = b.level || canRegisterLevels(req.user)[0];
   const rows = Array.isArray(b.rows) ? b.rows : [];
 
@@ -502,8 +534,8 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
 
   const results = [];
   for (const row of rows) {
-    const merged = { ...b, ...row, level: undefined };
-    if (merged.lga && !scopedLgas(req.user).includes(merged.lga)) {
+    const merged = registrationLocation(req.user, { ...b, ...row, level: undefined });
+    if (merged.lga && merged.lga !== 'Not specified' && !scopedLgas(req.user).includes(merged.lga)) {
       results.push({ ok: false, status: 403, error: merged.lga + ' is outside your constituency',
         input: row });
       continue;
@@ -513,7 +545,7 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
         || merged.ward !== ownPollingUnit.ward
         || merged.polling_unit !== ownPollingUnit.pollingUnit)) {
       results.push({ ok: false, status: 403,
-        error: 'Unit Promoters can only register people in their own polling unit', input: row });
+        error: 'Field users can only register people in their own polling unit', input: row });
       continue;
     }
     const r = await registerMemberRow(merged, {
@@ -615,8 +647,9 @@ app.get('/api/nominations', authenticate, wrap(async (req, res) => {
 
 /** A candidate's own current disparities/challenges report, or null. */
 app.get('/api/disparity-report', authenticate, wrap(async (req, res) => {
-  if (req.user.role !== 'candidate') {
-    return res.status(403).json({ error: 'Only candidate accounts submit this report' });
+  if (!isCandidateRole(req.user.role) && !isUnitPromoterRole(req.user.role)
+      && !isGrassrootRole(req.user.role)) {
+    return res.status(403).json({ error: 'This account cannot submit a field report' });
   }
   const row = await db.prepare('SELECT * FROM disparity_reports WHERE candidate_id = ?')
     .get(req.user.id);
@@ -624,8 +657,9 @@ app.get('/api/disparity-report', authenticate, wrap(async (req, res) => {
 }));
 
 app.post('/api/disparity-report', authenticate, wrap(async (req, res) => {
-  if (req.user.role !== 'candidate') {
-    return res.status(403).json({ error: 'Only candidate accounts submit this report' });
+  if (!isCandidateRole(req.user.role) && !isUnitPromoterRole(req.user.role)
+      && !isGrassrootRole(req.user.role)) {
+    return res.status(403).json({ error: 'This account cannot submit a field report' });
   }
   const disparities = String(req.body?.disparities || '').trim();
   const challenges = String(req.body?.challenges || '').trim();
@@ -903,6 +937,22 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   res.json({ ok: true, updated: 'task' });
 }));
 
+app.delete('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) => {
+  const taskId = Number(req.params.id);
+  const task = await db.prepare('SELECT id, title FROM tasks WHERE id = ?').get(taskId);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+
+  await db.transaction(async (tx) => {
+    await tx.prepare("DELETE FROM points_ledger WHERE source = 'task' AND source_id = ?").run(taskId);
+    await tx.prepare('DELETE FROM submissions WHERE task_id = ?').run(taskId);
+    await tx.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+  });
+
+  audit(req.user.id, req.user.username, 'task_deleted', 'task', taskId,
+    { title: task.title }, ip(req));
+  res.json({ ok: true });
+}));
+
 /** Tasks that apply to a given member, with their submission state. */
 app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
@@ -1091,6 +1141,13 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     + 'FROM members WHERE ' + scope.sql + ' ORDER BY created_at DESC LIMIT 25'
   ).all(...p);
 
+  const peopleAdded = (isUnitPromoterRole(req.user.role) || isGrassrootRole(req.user.role))
+    ? await db.prepare(
+      'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,created_at '
+      + 'FROM members WHERE upline_user_id = ? ORDER BY created_at DESC LIMIT 100'
+    ).all(req.user.id)
+    : [];
+
   const tasks = await db.prepare(
     'SELECT COUNT(*) total, '
     + "SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open "
@@ -1130,6 +1187,14 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     'SELECT COUNT(*) n FROM members WHERE ' + scope.sql + ' AND risk_score >= 50'
   ).get(...p)).n;
 
+  const platformCounts = await db.prepare(
+    "SELECT COUNT(*) total, "
+    + "SUM(CASE WHEN role = 'candidate' THEN 1 ELSE 0 END) candidates, "
+    + "SUM(CASE WHEN role IN ('unit_promoter', 'mobiliser') THEN 1 ELSE 0 END) nominees, "
+    + "SUM(CASE WHEN role IN ('grassroot', 'grassroots') THEN 1 ELSE 0 END) grassroots "
+    + "FROM users WHERE status = 'active'"
+  ).get();
+
   res.json({
     period: per,
     report: await dashboardReport(db, scope),
@@ -1140,11 +1205,13 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     coverage,
     targets: { lgas: LGAS.length, wards: TOTAL_WARDS, polling_units: TOTAL_POLLING_UNITS, engagements: 35100, mobilisers: 3510 },
     recent,
+    people_added: peopleAdded,
     tasks,
     survey_tasks: surveyTasks,
     survey_notifications: surveyTasks.filter((task) => task.created_at >= recentSurveyCutoff),
     submissions: subs,
     high_risk: highRisk,
+    platform_counts: platformCounts,
     voter_roll_loaded: await voterRollSize(),
   });
 }));
@@ -1166,7 +1233,7 @@ app.delete('/api/users/:id', authenticate, requireRole('admin', 'superadmin'), w
   const target = await db.prepare('SELECT id, username, role FROM users WHERE id = ?').get(userId);
   if (!target) return res.status(404).json({ error: 'Login not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
-  if (target.role === 'superadmin') {
+  if (normaliseRole(target.role) === 'superadmin') {
     return res.status(403).json({ error: 'Super administrator accounts cannot be deleted' });
   }
 
@@ -1188,22 +1255,55 @@ app.delete('/api/users/:id', authenticate, requireRole('admin', 'superadmin'), w
   res.json({ ok: true });
 }));
 
+function usernamePart(value) {
+  return String(value || 'state')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'state';
+}
+
+function candidateScopeType(office) {
+  const value = String(office || '').toLowerCase();
+  if (value.includes('governor')) return 'state';
+  if (value.includes('senator')) return 'senatorial';
+  if (value.includes('representative')) return 'federal';
+  if (value.includes('assembly')) return 'state_const';
+  return 'state';
+}
+
+async function generatedCandidateUsername(office, scopeValue) {
+  const base = 'candidate-' + usernamePart(office) + '-' + usernamePart(scopeValue);
+  let username = base;
+  let suffix = 2;
+  while (await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(username)) {
+    username = base + '-' + suffix++;
+  }
+  return username;
+}
+
 app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   const b = req.body || {};
-  for (const f of ['username', 'full_name', 'role']) {
+  for (const f of ['full_name', 'role']) {
     if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
   }
-  if (!VALID_USER_ROLES.has(String(b.role).trim())) {
+  const role = normaliseRole(b.role);
+  b.role = role;
+  if (!VALID_USER_ROLES.has(role)) {
     return res.status(400).json({ error: 'Unsupported user role' });
   }
-  if (!LOGIN_CREATION_ROLES.has(String(b.role).trim())) {
+  if (!LOGIN_CREATION_ROLES.has(role)) {
     return res.status(400).json({ error: 'Unit Promoter accounts must be created from Add network' });
   }
-  const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
-  if (exists) return res.status(409).json({ error: 'That username is already taken' });
+  const username = isCandidateRole(role)
+    ? await generatedCandidateUsername(b.office, b.scope_value)
+    : String(b.username || '').trim().toLowerCase();
+  if (!username) return res.status(400).json({ error: 'Username is required' });
+  if (!isCandidateRole(role)) {
+    const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(username);
+    if (exists) return res.status(409).json({ error: 'That username is already taken' });
+  }
 
   const pw = b.password || tempPassword();
-  if (b.role === 'mobiliser') {
+  if (isUnitPromoterRole(role)) {
     const phone = normalisePhone(b.phone);
     const [lga, ward, pollingUnit] = String(b.scope_value || '').split('|');
     if (!phone || !lga || !ward || !pollingUnit) {
@@ -1226,25 +1326,26 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
         'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
         + 'scope_type,scope_value,member_id,referral_code,status,created_at) '
         + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).run(String(b.username).trim().toLowerCase(), hashPassword(pw), 1, 'mobiliser', null,
+      ).run(username, hashPassword(pw), 1, role, null,
         b.full_name.trim(), phone, 'polling_unit', b.scope_value, memberId,
         referralCode('U'), 'active', nowISO());
       return { id: Number(user.lastInsertRowid), member_id: memberId };
     });
     audit(req.user.id, req.user.username, 'user_created', 'user', result.id,
-      { username: b.username, role: b.role, member_id: result.member_id }, ip(req));
-    return res.status(201).json({ ...result, username: String(b.username).trim().toLowerCase(), password: pw });
+      { username: b.username, role, member_id: result.member_id }, ip(req));
+    return res.status(201).json({ ...result, username, password: pw });
   }
   const info = await db.prepare(
     'INSERT INTO users (username,password_hash,must_reset,role,office,full_name,phone,'
     + 'scope_type,scope_value,referral_code,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).run(String(b.username).trim().toLowerCase(), hashPassword(pw), 1, b.role,
-    b.role === 'candidate' ? (b.office || null) : null, b.full_name, b.phone || null,
-    b.scope_type || 'state', b.scope_value || null, referralCode('U'), 'active', nowISO());
+  ).run(username, hashPassword(pw), 1, role,
+    isCandidateRole(role) ? (b.office || null) : null, b.full_name, b.phone || null,
+    isCandidateRole(role) ? candidateScopeType(b.office) : (b.scope_type || 'state'),
+    b.scope_value || null, referralCode('U'), 'active', nowISO());
 
   audit(req.user.id, req.user.username, 'user_created', 'user', Number(info.lastInsertRowid),
-    { username: b.username, role: b.role }, ip(req));
-  res.status(201).json({ id: Number(info.lastInsertRowid), username: b.username, password: pw });
+    { username: b.username, role }, ip(req));
+  res.status(201).json({ id: Number(info.lastInsertRowid), username, password: pw });
 }));
 
 app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async (req, res) => {
@@ -1320,21 +1421,24 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   for (const f of ['full_name', 'role', 'scope_type']) {
     if (!String(b[f] || '').trim()) return res.status(400).json({ error: 'Missing ' + f });
   }
-  if (!VALID_USER_ROLES.has(String(b.role).trim())) {
+  const role = normaliseRole(b.role);
+  b.role = role;
+  if (!VALID_USER_ROLES.has(role)) {
     return res.status(400).json({ error: 'Unsupported user role' });
   }
   const existingUser = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id);
   if (!existingUser) return res.status(404).json({ error: 'Login not found' });
-  if (b.role === 'mobiliser' && existingUser.role !== 'mobiliser') {
+  if (isUnitPromoterRole(role) && !isUnitPromoterRole(existingUser.role)) {
     return res.status(400).json({ error: 'Unit Promoter accounts must be created from Add network' });
   }
-  const office = b.role === 'candidate' ? (b.office || null) : null;
+  const office = isCandidateRole(role) ? (b.office || null) : null;
+  const scopeType = isCandidateRole(role) ? candidateScopeType(office) : b.scope_type;
   await db.prepare(
     'UPDATE users SET full_name = ?, phone = ?, role = ?, office = ?, scope_type = ?, scope_value = ? WHERE id = ?'
-  ).run(b.full_name.trim(), b.phone || null, b.role, office,
-    b.scope_type, b.scope_value || null, req.params.id);
+  ).run(b.full_name.trim(), b.phone || null, role, office,
+    scopeType, b.scope_value || null, req.params.id);
   audit(req.user.id, req.user.username, 'user_updated', 'user', Number(req.params.id),
-    { role: b.role, scope_type: b.scope_type }, ip(req));
+    { role, scope_type: b.scope_type }, ip(req));
   res.json({ ok: true });
 }));
 
@@ -1347,7 +1451,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
 app.post('/api/users/:id/coordinator', authenticate, requireAdmin, wrap(async (req, res) => {
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Login not found' });
-  if (target.role !== 'mobiliser') {
+  if (!isUnitPromoterRole(target.role)) {
     return res.status(400).json({ error: 'Only a Unit Promoter can be appointed Coordinator' });
   }
 

@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 
-const ROLES = ['candidate', 'admin'];
-const EDIT_ROLES = ['candidate', 'admin', 'mobiliser'];
+const ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot'];
+const EDIT_ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot', 'mobiliser'];
 const SCOPES = [
   { v: 'state', label: 'Whole state (all 33 LGAs)' },
   { v: 'senatorial', label: 'Senatorial district' },
@@ -15,6 +15,18 @@ const SCOPES = [
 ];
 const OFFICES = ['Governor', 'Deputy Governor', 'Senator',
   'House of Representatives', 'House of Assembly'];
+
+const scopeForOffice = (office) => {
+  const value = String(office || '').toLowerCase();
+  if (value.includes('governor')) return 'state';
+  if (value.includes('senator')) return 'senatorial';
+  if (value.includes('representative')) return 'federal';
+  if (value.includes('assembly')) return 'state_const';
+  return 'state';
+};
+
+const usernamePart = (value) => String(value || 'state').toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'state';
 
 function NewUser({ geo, onClose, onSaved }) {
   const [u, setU] = useState({
@@ -31,6 +43,8 @@ function NewUser({ geo, onClose, onSaved }) {
     setU((s) => ({
       ...s,
       [k]: v,
+      ...(k === 'office' && s.role === 'candidate'
+        ? { scope_type: scopeForOffice(v), scope_value: '' } : {}),
       ...(k === 'scope_type' ? { scope_value: '' } : {}),
       ...(k === 'role' && v !== 'candidate' ? { office: '' } : {}),
       ...(k === 'role' && v === 'mobiliser'
@@ -64,7 +78,7 @@ function NewUser({ geo, onClose, onSaved }) {
     finally { setBusy(false); }
   };
 
-  const ready = u.username.trim() && u.full_name.trim()
+  const ready = (u.role === 'candidate' || u.username.trim()) && u.full_name.trim()
     && (u.role !== 'mobiliser' || (u.phone.trim() && u.scope_value.split('|').every(Boolean)));
 
   if (created) {
@@ -106,10 +120,17 @@ function NewUser({ geo, onClose, onSaved }) {
       </Alert>
 
       <div className="grid grid-2">
-        <Field label="Username" required hint="Lowercase, no spaces">
-          <input type="text" value={u.username} onChange={set('username')}
-                 placeholder="sen.oyo-central" />
-        </Field>
+        {u.role === 'candidate' ? (
+          <Field label="Generated username" hint="Created automatically from office and constituency">
+            <input type="text" value={'candidate-' + usernamePart(u.office || 'office')
+              + '-' + usernamePart(u.scope_value)} disabled />
+          </Field>
+        ) : (
+          <Field label="Username" required hint="Lowercase, no spaces">
+            <input type="text" value={u.username} onChange={set('username')}
+                   placeholder="team.member" />
+          </Field>
+        )}
         <Field label="Full name" required>
           <input type="text" value={u.full_name} onChange={set('full_name')} />
         </Field>
@@ -132,27 +153,27 @@ function NewUser({ geo, onClose, onSaved }) {
         </Field>
       )}
       <div className="grid grid-2">
-        <Field label="Data they can see">
-          <select value={u.scope_type} onChange={set('scope_type')}>
+        <Field label="Data they can see" hint={u.role === 'candidate' ? 'Set automatically from office contested' : ''}>
+          <select value={u.scope_type} onChange={set('scope_type')} disabled={u.role === 'candidate'}>
             {SCOPES.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
           </select>
         </Field>
         {u.scope_type === 'polling_unit' ? (
           <>
-            <Field label="LGA" required>
+            <Field label="LGA">
               <select value={pollingLocation.lga} onChange={setPollingLocationField('lga')}>
                 <option value="">Select an LGA</option>
                 {(geo?.lgas || []).map((l) => <option key={l} value={l}>{l}</option>)}
               </select>
             </Field>
-            <Field label="Ward" required>
+            <Field label="Ward">
               <select value={pollingLocation.ward} onChange={setPollingLocationField('ward')}
                       disabled={!pollingLocation.lga}>
                 <option value="">Select a ward</option>
                 {Object.keys(pollingWards).map((w) => <option key={w} value={w}>{w}</option>)}
               </select>
             </Field>
-            <Field label="Polling unit" required>
+            <Field label="Polling unit">
               <select value={u.scope_value.split('|')[2] || ''} onChange={setPollingUnit}
                       disabled={!pollingLocation.ward}>
                 <option value="">Select a polling unit</option>
@@ -161,7 +182,7 @@ function NewUser({ geo, onClose, onSaved }) {
             </Field>
           </>
         ) : u.scope_type !== 'state' && (
-          <Field label="Which one" required>
+          <Field label="Which one">
             <select value={u.scope_value} onChange={set('scope_value')}>
               <option value="">Select</option>
               {options.map((o) => <option key={o} value={o}>{o}</option>)}
@@ -356,10 +377,10 @@ function ExportCredentialsModal({ onClose }) {
       </Alert>
       <Field label="Which accounts">
         <select value={role} onChange={(e) => setRole(e.target.value)}>
-          <option value="all">Everyone (except super administrators)</option>
+          <option value="all">Everyone (except Super Admins)</option>
           <option value="candidate">Candidates only</option>
           <option value="mobiliser">Unit Promoters only</option>
-          <option value="admin">Administrators only</option>
+          <option value="admin">Admins only</option>
         </select>
       </Field>
       <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
@@ -383,6 +404,7 @@ export default function Users() {
   const [rows, setRows] = useState(null);
   const [geo, setGeo] = useState(null);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState('all');
   const [creating, setCreating] = useState(false);
   const [reset, setReset] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -424,11 +446,25 @@ export default function Users() {
 
   if (!rows) return <Loading label="Loading logins" />;
 
-  const filtered = rows.filter((u) =>
-    !q || (u.username + ' ' + u.full_name + ' ' + (u.scope_value || ''))
-      .toLowerCase().includes(q.toLowerCase()));
-
   const byRole = rows.reduce((a, u) => { a[u.role] = (a[u.role] || 0) + 1; return a; }, {});
+  const tabFilter = (u) => {
+    if (tab === 'all') return true;
+    if (tab === 'candidate') return u.role === 'candidate';
+    if (tab === 'unit_promoter') return u.role === 'unit_promoter' || u.role === 'mobiliser';
+    if (tab === 'grassroot') return u.role === 'grassroot';
+    return true;
+  };
+
+  const filtered = rows.filter((u) =>
+    tabFilter(u) && (!q || (u.username + ' ' + u.full_name + ' ' + (u.scope_value || ''))
+      .toLowerCase().includes(q.toLowerCase())));
+
+  const counts = {
+    all: rows.length,
+    candidate: rows.filter((u) => u.role === 'candidate').length,
+    unit_promoter: rows.filter((u) => u.role === 'unit_promoter' || u.role === 'mobiliser').length,
+    grassroots: rows.filter((u) => u.role === 'grassroot').length,
+  };
 
   return (
     <>
@@ -461,6 +497,20 @@ export default function Users() {
               value={num(rows.filter((u) => u.status !== 'active').length)} />
       </div>
 
+      <div className="pill-row" style={{ marginBottom: 12 }}>
+        {[
+          ['all', 'All', counts.all],
+          ['candidate', 'Candidates', counts.candidate],
+          ['unit_promoter', 'Nominees', counts.unit_promoter],
+          ['grassroot', 'Grassroots', counts.grassroots],
+        ].map(([value, label, count]) => (
+          <button key={value} className={'pill' + (tab === value ? ' active' : '')}
+                  onClick={() => setTab(value)}>
+            {label} <span className="badge tiny">{count}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="toolbar">
         <input type="text" placeholder="Search username, name or constituency"
                value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 280 }} />
@@ -471,7 +521,7 @@ export default function Users() {
         <button className="btn sm" onClick={() => setCreating(true)}>+ Create login</button>
       </div>
 
-      <Card title="Platform logins"
+      <Card title="Platform accounts"
             note="Only these accounts can submit names. Every entry is traced back to one of them."
             bodyClass="">
         {filtered.length === 0 ? <Empty title="No logins match" /> : (

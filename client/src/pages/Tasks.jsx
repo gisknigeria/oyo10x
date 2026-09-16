@@ -292,6 +292,14 @@ export default function Tasks() {
     } catch (e) { setError(e.message); }
   };
 
+  const remove = async (task) => {
+    if (!window.confirm('Delete "' + task.title + '"? Its submissions and task points will also be removed.')) return;
+    try {
+      await api.delete('/tasks/' + task.id);
+      load();
+    } catch (e) { setError(e.message); }
+  };
+
   if (error) return <Alert type="error" onClose={() => setError('')}>{error}</Alert>;
   if (!data) return <Loading label="Loading tasks" />;
 
@@ -334,7 +342,7 @@ export default function Tasks() {
         )}
       </div>
 
-      {(me.permissions.is_admin || me.user.role === 'candidate') &&
+      {(me.permissions.is_admin || isCandidateRole(me.user.role)) &&
         <SurveyReports key={period} tasks={data.rows} isAdmin={me.permissions.is_admin}
           jurisdiction={me.user.scope_value || 'the full state'} onReviewed={load} />}
 
@@ -409,6 +417,9 @@ export default function Tasks() {
                           </button>
                           <button className="btn sm secondary task-action-btn" onClick={() => toggle(t)}>
                             {t.status === 'open' ? 'Close' : 'Reopen'}
+                          </button>
+                          <button className="btn sm danger task-action-btn" onClick={() => remove(t)}>
+                            Delete
                           </button>
                         </div>
                       </td>

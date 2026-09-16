@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { api, LEVEL_LABEL } from '../lib/api.js';
+import { Link, useLocation } from 'react-router-dom';
+import { api, LEVEL_LABEL, normalizeRole, isUnitPromoterRole } from '../lib/api.js';
 import { Card, Field, Alert, Loading, Status } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
@@ -49,7 +49,7 @@ function BulkRegisterTable({ geo, lockedLocation }) {
     .map((r, i) => ({ ...r, _index: i }))
     .filter((r) => r.first_name.trim() || r.last_name.trim() || r.phone.trim());
 
-  const ready = level && lga && ward && pollingUnit && filledRows.length > 0
+  const ready = level && filledRows.length > 0
     && filledRows.every((r) => r.first_name.trim() && r.last_name.trim() && r.phone.trim());
 
   const save = async () => {
@@ -102,20 +102,20 @@ function BulkRegisterTable({ geo, lockedLocation }) {
             {geo.levels.map((l) => <option key={l} value={l}>{LEVEL_LABEL[l] || l}</option>)}
           </select>
         </Field>
-        <Field label="LGA" required>
+        <Field label="LGA">
           <select value={lga} disabled={locked} onChange={(e) => { setLga(e.target.value); setWard(''); setPollingUnit(''); }}>
             <option value="">Select an LGA</option>
             {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </Field>
-        <Field label="Ward" required>
+        <Field label="Ward">
           <select value={ward} disabled={locked || !lga} onChange={(e) => { setWard(e.target.value); setPollingUnit(''); }}>
             <option value="">Select a ward</option>
             {wards.map((w) => <option key={w} value={w}>{w}</option>)}
           </select>
         </Field>
       </div>
-      <Field label="Polling unit" required>
+      <Field label="Polling unit">
         <select value={pollingUnit} onChange={(e) => setPollingUnit(e.target.value)} disabled={locked || !ward}>
           <option value="">Select a polling unit</option>
           {pollingUnits.map((u) => <option key={u} value={u}>{u}</option>)}
@@ -212,7 +212,9 @@ function BulkRegisterTable({ geo, lockedLocation }) {
 
 export default function RegisterMember() {
   const { me } = useAuth();
+  const location = useLocation();
   const [geo, setGeo] = useState(null);
+  const isCandidateFlow = normalizeRole(me.user.role) === 'candidate';
   const [mode, setMode] = useState('single');
   const [form, setForm] = useState(BLANK);
   const [gps, setGps] = useState(null);
@@ -228,12 +230,18 @@ export default function RegisterMember() {
   useEffect(() => {
     api.get('/geo').then((g) => {
       setGeo(g);
-      const parts = me.user.role === 'mobiliser' && !me.permissions.is_coordinator
+      const params = new URLSearchParams(location.search);
+      const requestedLevel = normalizeRole(params.get('level'));
+      const parts = (isUnitPromoterRole(me.user.role) || normalizeRole(me.user.role) === 'grassroot') && !me.permissions.is_coordinator
         ? String(me.user.scope_value || '').split('|') : [];
-      setForm((f) => ({ ...f, level: g.levels[0] || '',
+      const allowedLevels = isCandidateFlow ? ['unit_promoter'] : g.levels;
+      const nextLevel = isCandidateFlow
+        ? 'unit_promoter'
+        : ((requestedLevel && allowedLevels.includes(requestedLevel)) ? requestedLevel : (allowedLevels[0] || ''));
+      setForm((f) => ({ ...f, level: nextLevel,
         ...(parts.length === 3 ? { lga: parts[0], ward: parts[1], polling_unit: parts[2] } : {}) }));
     }).catch((e) => setError(e.message));
-  }, [me]);
+  }, [location.search, me, isCandidateFlow]);
 
   const set = (k) => (e) => {
     const v = e.target.value;
@@ -311,6 +319,14 @@ export default function RegisterMember() {
   if (error && !geo) return <Alert type="error">{error}</Alert>;
   if (!geo) return <Loading label="Loading constituency data" />;
 
+  if (isCandidateFlow) {
+    return (
+      <Alert type="info" title="Candidate access is limited to nominee registration. ">
+        Candidates can add Unit Promoters only. Use the nominations page for this flow.
+      </Alert>
+    );
+  }
+
   if (!geo.levels.length) {
     return (
       <Alert type="warn" title="Your account cannot register members. ">
@@ -322,11 +338,11 @@ export default function RegisterMember() {
 
   const wards = geo.wards[form.lga] || [];
   const pollingUnits = (geo.polling_units?.[form.lga]?.[form.ward]) || [];
-  const lockedLocation = me.user.role === 'mobiliser' && !me.permissions.is_coordinator
+  const lockedLocation = (isUnitPromoterRole(me.user.role) || normalizeRole(me.user.role) === 'grassroot') && !me.permissions.is_coordinator
     ? (() => { const [lga, ward, pollingUnit] = String(me.user.scope_value || '').split('|');
       return lga && ward && pollingUnit ? { lga, ward, pollingUnit } : null; })()
     : null;
-  const required = ['first_name', 'last_name', 'phone', 'lga', 'ward', 'polling_unit'];
+    const required = ['first_name', 'last_name', 'phone'];
   const ready = required.every((k) => String(form[k] || '').trim());
 
   const modeToggle = (
@@ -427,14 +443,14 @@ export default function RegisterMember() {
 
             <div className="section-title">Location</div>
             <div className="grid grid-2">
-              <Field label="Local Government Area" required
+              <Field label="Local Government Area"
                      hint={geo.lgas.length + ' LGA(s) available to your account'}>
                 <select value={form.lga} disabled={!!lockedLocation} onChange={set('lga')}>
                   <option value="">Select an LGA</option>
                   {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
               </Field>
-              <Field label="Ward" required
+              <Field label="Ward"
                      hint={form.lga ? wards.length + ' wards in ' + form.lga
                                     : 'Choose an LGA first'}>
                 <select value={form.ward} onChange={set('ward')} disabled={!!lockedLocation || !form.lga}>
@@ -443,7 +459,7 @@ export default function RegisterMember() {
                 </select>
               </Field>
             </div>
-            <Field label="Polling unit" required
+            <Field label="Polling unit"
                    hint={form.ward ? pollingUnits.length + ' polling units in this ward' : 'Choose a ward first'}>
               <select value={form.polling_unit} onChange={set('polling_unit')} disabled={!!lockedLocation || !form.ward}>
                 <option value="">Select a polling unit</option>
