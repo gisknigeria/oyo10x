@@ -175,7 +175,9 @@ function CandidateDashboard({ data, me }) {
         note={'Your view covers ' + (me.user.scope_value || 'the full state') + '. Track growth, reviews, and field activity from here.'}
       />
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="People under your scope" value={num(totals.total)} accent
+        <Stat label="Total Unit Promoters" value={num(levels.mobiliser || 0)} accent
+          foot={num(totals.total) + ' total people under your scope'} progress={pct(levels.mobiliser || 0, totals.total)} />
+        <Stat label="People under your scope" value={num(totals.total)}
           foot={num(totals.pending) + ' awaiting review'} progress={pct(totals.verified, totals.total)} />
         <Stat label="Wards reached" value={coverage.wards + ' / ' + targets.wards}
           foot={coverage.units + ' polling units active'} progress={pct(coverage.wards, targets.wards)} />
@@ -344,7 +346,12 @@ export default function Dashboard() {
 
       <div className="grid grid-5" style={{ marginBottom: 16 }}>
         <Stat
-          label="Members registered" value={num(totals.total)} accent
+          label="Total Unit Promoters" value={num(levelMap.mobiliser || 0)} accent
+          foot={num(totals.total) + ' total people in view'}
+          progress={pct(levelMap.mobiliser || 0, totals.total)}
+        />
+        <Stat
+          label="Members registered" value={num(totals.total)}
           foot={num(totals.verified) + ' verified · ' + num(totals.pending) + ' awaiting review'}
           progress={verifyRate}
         />
