@@ -165,6 +165,35 @@ function scopedLgas(user) {
   return lgasForScope(user.scope_type, user.scope_value);
 }
 
+// Campaign Council directive, 9 Sept 2026: each candidate nominates a fixed
+// number of Unit Promoters -- not the open-ended "at least 10" growth model
+// that governs a Unit Promoter's own downline and pay eligibility. Governor
+// and Deputy Governor are not covered by that directive, so they carry no
+// quota here.
+const NOMINATION_QUOTAS = {
+  Senator: 4,
+  'House of Representatives': 3,
+  'House of Assembly': 3,
+};
+const nominationQuota = (office) => NOMINATION_QUOTAS[office] || null;
+
+const isGovernor = (user) => user.role === 'candidate' && user.office === 'Governor';
+// Who the Council directive says should see nomination progress and the
+// disparities/challenges reports: leadership (admin/superadmin) and the
+// Governor specifically -- not other candidates, who only see their own.
+const canSeeCompliance = (user) => ADMIN_ROLES.has(user.role) || isGovernor(user);
+
+async function nominationStatus(candidateUserId, office) {
+  const quota = nominationQuota(office);
+  if (!quota) return null;
+  const row = await db.prepare(
+    "SELECT COUNT(*) n FROM members WHERE upline_user_id = ? AND level = 'mobiliser' "
+    + "AND status != 'rejected'"
+  ).get(candidateUserId);
+  const count = row?.n || 0;
+  return { quota, count, complete: count >= quota, remaining: Math.max(0, quota - count) };
+}
+
 /* ------------------------------- health --------------------------------- */
 
 // Unauthenticated, so platform health checks (Render, Fly, Cloud Run) get a 200.
@@ -203,20 +232,26 @@ const isCoordinator = (user) => !!(user.role === 'mobiliser' && Number(user.is_c
 const canReview = (user) => ADMIN_ROLES.has(user.role)
   || user.role === 'candidate' || isCoordinator(user);
 
-app.get('/api/me', authenticate, (req, res) => {
+app.get('/api/me', authenticate, wrap(async (req, res) => {
   const caps = LEVEL_CAPS[req.user.role] || null;
+  const nomination = req.user.role === 'candidate'
+    ? await nominationStatus(req.user.id, req.user.office)
+    : null;
   res.json({
     user: req.user,
     permissions: {
       is_admin: ADMIN_ROLES.has(req.user.role),
       is_coordinator: isCoordinator(req.user),
+      is_governor: isGovernor(req.user),
       can_register_levels: canRegisterLevels(req.user),
       can_review: canReview(req.user),
+      can_see_compliance: canSeeCompliance(req.user),
       scoped_lgas: scopedLgas(req.user),
     },
+    nomination,
     caps,
   });
-});
+}));
 
 app.post('/api/auth/change-password', authenticate, wrap(async (req, res) => {
   const { current_password, new_password } = req.body || {};
@@ -522,6 +557,125 @@ app.post('/api/members/:id/login', authenticate, wrap(async (req, res) => {
   audit(req.user.id, req.user.username, 'member_login_created', 'member', member.id,
     { username, role }, ip(req));
   res.status(201).json({ username, password, role });
+}));
+
+/* --------------------- nominations & compliance reporting --------------------- */
+
+/**
+ * Every candidate covered by the nomination directive, with their Unit
+ * Promoter progress and their nominees -- so leadership can see not just a
+ * count but who was actually nominated, matching the Council's ask for
+ * "detailed information" on each nominee.
+ */
+app.get('/api/nominations', authenticate, wrap(async (req, res) => {
+  if (!canSeeCompliance(req.user)) {
+    return res.status(403).json({ error: 'You cannot view nomination compliance' });
+  }
+  const candidates = await db.prepare(
+    "SELECT id, username, full_name, office, scope_value FROM users "
+    + "WHERE role = 'candidate' AND office IN ('Senator','House of Representatives','House of Assembly') "
+    + 'ORDER BY office, full_name'
+  ).all();
+
+  const nominees = await db.prepare(
+    "SELECT id, code, first_name, last_name, lga, ward, polling_unit, pvc_no, "
+    + "bank_name, account_number, status, upline_user_id "
+    + "FROM members WHERE level = 'mobiliser' AND status != 'rejected' "
+    + 'ORDER BY created_at'
+  ).all();
+  const byUpline = new Map();
+  for (const n of nominees) {
+    if (!byUpline.has(n.upline_user_id)) byUpline.set(n.upline_user_id, []);
+    byUpline.get(n.upline_user_id).push(n);
+  }
+
+  const rows = candidates.map((c) => {
+    const list = byUpline.get(c.id) || [];
+    const quota = nominationQuota(c.office);
+    return {
+      id: c.id, username: c.username, full_name: c.full_name,
+      office: c.office, scope_value: c.scope_value,
+      quota, count: list.length, complete: list.length >= quota,
+      remaining: Math.max(0, quota - list.length),
+      nominees: list,
+    };
+  });
+
+  res.json({
+    rows,
+    summary: {
+      candidates: rows.length,
+      complete: rows.filter((r) => r.complete).length,
+      incomplete: rows.filter((r) => !r.complete).length,
+      total_nominated: rows.reduce((a, r) => a + r.count, 0),
+      total_required: rows.reduce((a, r) => a + r.quota, 0),
+    },
+  });
+}));
+
+/** A candidate's own current disparities/challenges report, or null. */
+app.get('/api/disparity-report', authenticate, wrap(async (req, res) => {
+  if (req.user.role !== 'candidate') {
+    return res.status(403).json({ error: 'Only candidate accounts submit this report' });
+  }
+  const row = await db.prepare('SELECT * FROM disparity_reports WHERE candidate_id = ?')
+    .get(req.user.id);
+  res.json({ report: row || null });
+}));
+
+app.post('/api/disparity-report', authenticate, wrap(async (req, res) => {
+  if (req.user.role !== 'candidate') {
+    return res.status(403).json({ error: 'Only candidate accounts submit this report' });
+  }
+  const disparities = String(req.body?.disparities || '').trim();
+  const challenges = String(req.body?.challenges || '').trim();
+  if (!disparities && !challenges) {
+    return res.status(400).json({ error: 'Describe at least one of the disparities or challenges' });
+  }
+
+  const existing = await db.prepare('SELECT id FROM disparity_reports WHERE candidate_id = ?')
+    .get(req.user.id);
+  if (existing) {
+    await db.prepare(
+      'UPDATE disparity_reports SET disparities = ?, challenges = ?, updated_at = ?, '
+      + 'reviewed_by = NULL, reviewed_at = NULL, review_note = NULL WHERE candidate_id = ?'
+    ).run(disparities, challenges, nowISO(), req.user.id);
+  } else {
+    await db.prepare(
+      'INSERT INTO disparity_reports (candidate_id, disparities, challenges, submitted_at) '
+      + 'VALUES (?,?,?,?)'
+    ).run(req.user.id, disparities, challenges, nowISO());
+  }
+  await audit(req.user.id, req.user.username, 'disparity_report_submitted', 'user', req.user.id,
+    null, ip(req));
+  const row = await db.prepare('SELECT * FROM disparity_reports WHERE candidate_id = ?')
+    .get(req.user.id);
+  res.status(existing ? 200 : 201).json({ report: row });
+}));
+
+app.get('/api/admin/disparity-reports', authenticate, wrap(async (req, res) => {
+  if (!canSeeCompliance(req.user)) {
+    return res.status(403).json({ error: 'You cannot view these reports' });
+  }
+  const rows = await db.prepare(
+    'SELECT r.*, u.full_name candidate_name, u.office, u.scope_value, u.username candidate_username '
+    + 'FROM disparity_reports r JOIN users u ON u.id = r.candidate_id '
+    + 'ORDER BY r.submitted_at DESC'
+  ).all();
+  res.json({ rows });
+}));
+
+app.post('/api/admin/disparity-reports/:id/review', authenticate, wrap(async (req, res) => {
+  if (!canSeeCompliance(req.user)) {
+    return res.status(403).json({ error: 'You cannot review these reports' });
+  }
+  const note = req.body?.note ? String(req.body.note).trim() : null;
+  await db.prepare(
+    'UPDATE disparity_reports SET reviewed_by = ?, reviewed_at = ?, review_note = ? WHERE id = ?'
+  ).run(req.user.id, nowISO(), note, req.params.id);
+  await audit(req.user.id, req.user.username, 'disparity_report_reviewed', null,
+    Number(req.params.id), { note }, ip(req));
+  res.json({ ok: true });
 }));
 
 app.get('/api/members', authenticate, wrap(async (req, res) => {

@@ -13,6 +13,7 @@ import Network from './pages/Network.jsx';
 import Tasks from './pages/Tasks.jsx';
 import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
+import Compliance from './pages/Compliance.jsx';
 import PublicRegistration from './pages/PublicRegistration.jsx';
 import Profile from './pages/Profile.jsx';
 
@@ -31,6 +32,8 @@ const NAV = [
   { to: '/payroll', label: 'Points & payment', icon: '₦' },
   { group: 'Administration', admin: true },
   { to: '/users', label: 'Logins', icon: '⚿', admin: true },
+  { group: 'Oversight', needs: 'compliance' },
+  { to: '/compliance', label: 'Nominations & reports', icon: '⚑', needs: 'compliance' },
 ];
 
 function Shell({ children }) {
@@ -40,11 +43,13 @@ function Shell({ children }) {
   const isAdmin = me.permissions.is_admin;
   const canRegister = me.permissions.can_register_levels.length > 0;
   const canReview = me.permissions.can_review;
+  const canSeeCompliance = me.permissions.can_see_compliance;
 
   const visible = NAV.filter((item) => {
     if (item.admin && !isAdmin) return false;
     if (item.needs === 'register' && !canRegister) return false;
     if (item.needs === 'review' && !canReview) return false;
+    if (item.needs === 'compliance' && !canSeeCompliance) return false;
     return true;
   });
 
@@ -198,6 +203,8 @@ export default function App() {
           <Route path="/tasks" element={<Tasks />} />
           <Route path="/payroll" element={<Payroll />} />
           {isAdmin && <Route path="/users" element={<Users />} />}
+          {me.permissions.can_see_compliance
+            && <Route path="/compliance" element={<Compliance />} />}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

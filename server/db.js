@@ -217,6 +217,21 @@ CREATE TABLE IF NOT EXISTS registration_drafts (
   completed_at TEXT,
   created_at TEXT NOT NULL
 );
+
+-- One current disparities/challenges report per candidate, per the Campaign
+-- Council directive of 9 Sept 2026 (items i & ii). Upserted on submission --
+-- updated_at tracks edits, reviewed_* tracks leadership follow-up.
+CREATE TABLE IF NOT EXISTS disparity_reports (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
+  disparities  TEXT,
+  challenges   TEXT,
+  submitted_at TEXT NOT NULL,
+  updated_at   TEXT,
+  reviewed_by  INTEGER REFERENCES users(id),
+  reviewed_at  TEXT,
+  review_note  TEXT
+);
 `);
 
 // Additive migrations. Safe to run on every boot: an existing column throws,
