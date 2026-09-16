@@ -8,6 +8,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { db, nowISO, period as currentPeriod, audit } from './db.js';
+import { dashboardReport } from './dashboard-report.js';
+import { taskReport } from './task-report.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
   requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
@@ -655,12 +657,14 @@ app.get('/api/network', authenticate, wrap(async (req, res) => {
 
 app.get('/api/tasks', authenticate, wrap(async (req, res) => {
   const per = req.query.period || currentPeriod();
-  const rows = await db.prepare(
-    'SELECT t.*, (SELECT COUNT(*) FROM submissions s WHERE s.task_id = t.id) submissions, '
-    + "(SELECT COUNT(*) FROM submissions s WHERE s.task_id = t.id AND s.status = 'approved') approved "
-    + 'FROM tasks t WHERE t.period = ? ORDER BY t.created_at DESC'
-  ).all(per);
-  for (const t of rows) t.questions = t.questions_json ? JSON.parse(t.questions_json) : [];
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(per)) {
+    return res.status(400).json({ error: 'Period must use YYYY-MM' });
+  }
+  const rows = await taskReport(db, {
+    scope: memberScope(req.user), period: per, isAdmin: ADMIN_ROLES.has(req.user.role),
+    lgas: scopedLgas(req.user),
+    ward: req.user.scope_type === 'ward' ? req.user.scope_value : null,
+  });
   res.json({ period: per, rows, activity_points: ACTIVITY_POINTS });
 }));
 
@@ -744,7 +748,9 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
 
 /** Tasks that apply to a given member, with their submission state. */
 app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) => {
-  const m = await db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.memberId);
+  const scope = memberScope(req.user);
+  const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
+    .get(req.params.memberId, ...scope.params);
   if (!m) return res.status(404).json({ error: 'Member not found' });
   const per = req.query.period || currentPeriod();
   const completion = await taskCompletion(m, per);
@@ -840,6 +846,12 @@ app.post('/api/submissions/:id/review', authenticate, wrap(async (req, res) => {
   }
   const s = await db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id);
   if (!s) return res.status(404).json({ error: 'Submission not found' });
+  if (!ADMIN_ROLES.has(req.user.role)) {
+    const scope = memberScope(req.user);
+    const member = await db.prepare('SELECT id FROM members WHERE id = ? AND (' + scope.sql + ')')
+      .get(s.member_id, ...scope.params);
+    if (!member) return res.status(403).json({ error: 'That submission is outside your jurisdiction' });
+  }
   const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(s.task_id);
 
   let awarded = 0;
@@ -934,12 +946,13 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     + ' GROUP BY s.status'
   ).all(...p);
 
-  const highRisk = await db.prepare(
+  const highRisk = (await db.prepare(
     'SELECT COUNT(*) n FROM members WHERE ' + scope.sql + ' AND risk_score >= 50'
-  ).get(...p).n;
+  ).get(...p)).n;
 
   res.json({
     period: per,
+    report: await dashboardReport(db, scope),
     totals,
     by_level: byLevel,
     by_lga: byLga,
@@ -950,7 +963,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     tasks,
     submissions: subs,
     high_risk: highRisk,
-    voter_roll_loaded: voterRollSize(),
+    voter_roll_loaded: await voterRollSize(),
   });
 }));
 

@@ -3,24 +3,27 @@ import { Link } from 'react-router-dom';
 import { api, num, timeAgo } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Stat } from '../components/ui.jsx';
 
-export default function Submissions({ compact = false }) {
+export default function Submissions({ compact = false, taskId = null, initialStatus = 'pending', onReviewed }) {
   const [rows, setRows] = useState(null);
-  const [status, setStatus] = useState('pending');
+  const [status, setStatus] = useState(initialStatus);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const d = await api.get('/submissions' + (status ? '?status=' + status : ''));
+      const query = new URLSearchParams();
+      if (status) query.set('status', status);
+      if (taskId) query.set('task_id', taskId);
+      const d = await api.get('/submissions?' + query.toString());
       setRows(d.rows);
     } catch (e) { setError(e.message); }
-  }, [status]);
+  }, [status, taskId]);
 
   useEffect(() => { setRows(null); load(); }, [load]);
 
   const review = async (id, decision) => {
     setBusy(id);
-    try { await api.post('/submissions/' + id + '/review', { status: decision }); await load(); }
+    try { await api.post('/submissions/' + id + '/review', { status: decision }); await load(); onReviewed?.(); }
     catch (e) { setError(e.message); }
     finally { setBusy(null); }
   };
@@ -40,7 +43,7 @@ export default function Submissions({ compact = false }) {
             ))}
           </div>
           <div className="spacer" />
-          {rows && <span className="muted">{num(rows.length)} submission(s)</span>}
+          {rows && <span className="muted">{num(rows.length)} submission(s){rows.length === 500 ? ' · latest 500 shown' : ''}</span>}
         </div>
       )}
 

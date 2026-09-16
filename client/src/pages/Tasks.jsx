@@ -3,6 +3,7 @@ import { api, num, LEVEL_LABEL } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Submissions from './Submissions.jsx';
+import SurveyReports from '../components/SurveyReports.jsx';
 
 const TYPES = [
   { v: 'rally', label: 'Rally attendance', points: 5 },
@@ -117,7 +118,7 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   );
 }
 
-function TaskForm({ geo, task = null, onSave, onClose }) {
+function TaskForm({ geo, task = null, period, onSave, onClose }) {
   const initialTask = task ? {
     title: task.title || '',
     description: task.description || '',
@@ -155,7 +156,7 @@ function TaskForm({ geo, task = null, onSave, onClose }) {
   const save = async () => {
     setBusy(true); setError('');
     try {
-      const payload = { ...t, points: Number(t.points) };
+      const payload = { ...t, points: Number(t.points), period: task?.period || period };
       if (task?.id) {
         await api.patch('/tasks/' + task.id, payload);
       } else {
@@ -271,9 +272,18 @@ export default function Tasks() {
   const [creating, setCreating] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
 
-  const load = () => api.get('/tasks').then(setData).catch((e) => setError(e.message));
-  useEffect(() => { load(); api.get('/geo').then(setGeo).catch(() => {}); }, []);
+  const load = () => api.get('/tasks?period=' + encodeURIComponent(period)).then(setData).catch((e) => setError(e.message));
+  useEffect(() => {
+    let active = true;
+    setData(null);
+    api.get('/tasks?period=' + encodeURIComponent(period))
+      .then((result) => { if (active) setData(result); })
+      .catch((e) => { if (active) setError(e.message); });
+    return () => { active = false; };
+  }, [period]);
+  useEffect(() => { api.get('/geo').then(setGeo).catch(() => {}); }, []);
 
   const toggle = async (t) => {
     try {
@@ -293,11 +303,11 @@ export default function Tasks() {
   return (
     <>
       {creating && (
-        <TaskForm geo={geo} onClose={() => setCreating(false)}
+        <TaskForm geo={geo} period={period} onClose={() => setCreating(false)}
                   onSave={() => { setCreating(false); load(); }} />
       )}
       {editingTask && (
-        <TaskForm geo={geo} task={editingTask} onClose={() => setEditingTask(null)}
+        <TaskForm geo={geo} task={editingTask} period={period} onClose={() => setEditingTask(null)}
                   onSave={() => { setEditingTask(null); load(); }} />
       )}
       {selectedTask && (
@@ -315,11 +325,18 @@ export default function Tasks() {
       </div>
 
       <div className="toolbar">
+        <label htmlFor="task-period">Report month</label>
+        <input id="task-period" type="month" value={period} style={{ width: 'auto' }}
+          onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} />
         <div className="spacer" />
         {me.permissions.is_admin && (
           <button className="btn sm" onClick={() => setCreating(true)}>+ Create task</button>
         )}
       </div>
+
+      {(me.permissions.is_admin || me.user.role === 'candidate') &&
+        <SurveyReports key={period} tasks={data.rows} isAdmin={me.permissions.is_admin}
+          jurisdiction={me.user.scope_value || 'the full state'} onReviewed={load} />}
 
       <Card title="Tasks"
             note="Mandatory tasks gate monthly payment for the member and their upline"

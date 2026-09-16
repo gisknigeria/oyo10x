@@ -4,6 +4,7 @@ import { api, num, pct, timeAgo, LEVEL_LABEL } from '../lib/api.js';
 import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Verification from './Verification.jsx';
+import OperationalReport from '../components/OperationalReport.jsx';
 
 const FIELD_ROLES = new Set(['mobiliser']);
 
@@ -128,6 +129,7 @@ function CandidateDashboard({ data, me }) {
         <Stat label="Open tasks" value={num(tasks.open || 0)}
           foot={(tasks.total || 0) + ' tasks this period'} />
       </div>
+      <OperationalReport data={data} />
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="Your network" note="People currently registered under you, by role">
           <Bar label="Mobilisers" value={levels.mobiliser || 0} max={Math.max(levels.mobiliser || 0, 10)}
@@ -258,7 +260,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     api.get('/dashboard').then(setData).catch((e) => setError(e.message));
-    if (me.permissions.is_admin) api.get('/admin/audit').then((d) => setActivity(d.rows));
+    if (me.permissions.is_admin) api.get('/admin/audit').then((d) => setActivity(d.rows)).catch(() => setActivity([]));
   }, [me.permissions.is_admin]);
 
   if (error) return <Alert type="error">{error}</Alert>;
@@ -274,6 +276,8 @@ export default function Dashboard() {
 
   return (
     <>
+      <DashboardHeading title="Programme administration" note="Full dashboard across all jurisdictions." />
+      <OperationalReport data={data} isAdmin={me.permissions.is_admin} />
       {totals.total === 0 && (
         <Alert type="info" title="No members registered yet. ">
           Use <Link to="/register">Register member</Link> to add your first
