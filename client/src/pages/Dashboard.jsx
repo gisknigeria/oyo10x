@@ -108,8 +108,63 @@ function PeopleWithLocation({ rows }) {
   );
 }
 
+function SurveyDesk({ surveys = [], notifications = [] }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {notifications.length > 0 && (
+        <Alert type="info" title={notifications.length + ' new survey' + (notifications.length === 1 ? '' : 's') + ' published'}>
+          Review the questions below and use the Tasks page to monitor responses.
+        </Alert>
+      )}
+      <Card
+        title="Survey desk"
+        note="Live questions from your current jurisdiction"
+        actions={<Link className="btn sm secondary" to="/tasks">Open tasks</Link>}
+        bodyClass=""
+      >
+        {surveys.length === 0 ? (
+          <Empty title="No open surveys yet">
+            When a survey is published, it will appear here with its questions and response progress.
+          </Empty>
+        ) : (
+          <div className="grid grid-2" style={{ gap: 12 }}>
+            {surveys.slice(0, 4).map((survey) => (
+              <div key={survey.id} className="card" style={{ padding: 14, border: '1px solid var(--ink-200)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{survey.title}</div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+                      {survey.target_scope_value || 'Whole programme'} · {survey.points} points
+                    </div>
+                  </div>
+                  <span className="badge blue">survey</span>
+                </div>
+                {survey.description && <p className="muted" style={{ fontSize: 13 }}>{survey.description}</p>}
+                <div className="section-title" style={{ marginTop: 12 }}>Questions</div>
+                {(survey.questions || []).slice(0, 3).map((question, index) => (
+                  <div key={question.id || index} className="check-row" style={{ padding: '7px 0' }}>
+                    <div className="check-icon none">{index + 1}</div>
+                    <div className="check-label">{question.label || 'Question ' + (index + 1)}</div>
+                  </div>
+                ))}
+                {(!survey.questions || survey.questions.length === 0) && (
+                  <div className="muted" style={{ fontSize: 13 }}>No questions added yet.</div>
+                )}
+                <div className="hint" style={{ marginTop: 10 }}>
+                  {num(survey.submissions)} response(s) · {num(survey.pending)} awaiting review
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function CandidateDashboard({ data, me }) {
-  const { totals, coverage, targets, by_level, by_lga, by_ward, recent, tasks, submissions } = data;
+  const { totals, coverage, targets, by_level, by_lga, by_ward, recent, tasks, submissions,
+    survey_tasks, survey_notifications } = data;
   const levels = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
 
@@ -120,7 +175,7 @@ function CandidateDashboard({ data, me }) {
         note={'Your view covers ' + (me.user.scope_value || 'the full state') + '. Track growth, reviews, and field activity from here.'}
       />
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="Verified members" value={num(totals.verified)} accent
+        <Stat label="People under your scope" value={num(totals.total)} accent
           foot={num(totals.pending) + ' awaiting review'} progress={pct(totals.verified, totals.total)} />
         <Stat label="Wards reached" value={coverage.wards + ' / ' + targets.wards}
           foot={coverage.units + ' polling units active'} progress={pct(coverage.wards, targets.wards)} />
@@ -129,6 +184,7 @@ function CandidateDashboard({ data, me }) {
         <Stat label="Open tasks" value={num(tasks.open || 0)}
           foot={(tasks.total || 0) + ' tasks this period'} />
       </div>
+      <SurveyDesk surveys={survey_tasks} notifications={survey_notifications} />
       <OperationalReport data={data} />
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="Your network" note="People currently registered under you, by role">
@@ -266,7 +322,8 @@ export default function Dashboard() {
   if (error) return <Alert type="error">{error}</Alert>;
   if (!data) return <Loading label="Loading programme data" />;
 
-  const { totals, coverage, targets, by_level, by_lga, recent, tasks, submissions } = data;
+  const { totals, coverage, targets, by_level, by_lga, recent, tasks, submissions,
+    survey_tasks, survey_notifications } = data;
   const levelMap = Object.fromEntries(by_level.map((r) => [r.level, r.n]));
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
   const verifyRate = pct(totals.verified, totals.total);
@@ -315,6 +372,8 @@ export default function Dashboard() {
           progressTone="warn"
         />
       </div>
+
+      <SurveyDesk surveys={survey_tasks} notifications={survey_notifications} />
 
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="10X network structure"

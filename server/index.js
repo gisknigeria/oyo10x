@@ -939,6 +939,29 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     + "SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) open "
     + 'FROM tasks WHERE period = ?'
   ).get(per);
+  const taskRows = await taskReport(db, {
+    scope,
+    period: per,
+    isAdmin: ADMIN_ROLES.has(req.user.role),
+    lgas: scopedLgas(req.user),
+    ward: req.user.scope_type === 'ward' ? req.user.scope_value : null,
+  });
+  const surveyTasks = taskRows
+    .filter((task) => task.type === 'survey' && task.status === 'open')
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      questions: task.questions,
+      points: task.points,
+      mandatory: task.mandatory,
+      target_scope_value: task.target_scope_value,
+      created_at: task.created_at,
+      submissions: task.submissions,
+      approved: task.approved,
+      pending: task.pending,
+    }));
+  const recentSurveyCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const subs = await db.prepare(
     'SELECT s.status, COUNT(*) n FROM submissions s JOIN members m ON m.id = s.member_id '
@@ -961,6 +984,8 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     targets: { lgas: LGAS.length, wards: TOTAL_WARDS, polling_units: TOTAL_POLLING_UNITS, engagements: 35100, mobilisers: 3510 },
     recent,
     tasks,
+    survey_tasks: surveyTasks,
+    survey_notifications: surveyTasks.filter((task) => task.created_at >= recentSurveyCutoff),
     submissions: subs,
     high_risk: highRisk,
     voter_roll_loaded: await voterRollSize(),
