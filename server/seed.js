@@ -156,7 +156,7 @@ async function makeMember(o) {
   const info = await insertMember.run(
     referralCode('OYO'), first, last, nextPhone(),
     pick(['Mr', 'Mrs', 'Miss', 'Chief', 'Alhaji', 'Dr']),
-    o.designation || 'Community Mobiliser',
+    o.designation || 'Unit Promoter',
     // 19-character VIN, matching INEC format.
     ('90F' + randDigits(16)).slice(0, 19),
     randDigits(11), bank, acct, first + ' ' + last,
@@ -167,7 +167,7 @@ async function makeMember(o) {
   return Number(info.lastInsertRowid);
 }
 
-// Three LGAs with mobilisers.
+// Three LGAs with Unit Promoters.
 const DEMO_LGAS = ['Ibadan North', 'Ogbomosho North', 'Iseyin'];
 const demoLogins = [];
 
@@ -181,7 +181,7 @@ for (const lga of DEMO_LGAS) {
     const ward = wards[mo % wards.length];
     const mobMemberId = await makeMember({
       lga, ward, polling_unit: ward + ' / PU ' + String(100 + mo).padStart(3, '0'),
-      level: 'mobiliser', designation: 'Polling Unit Mobiliser',
+      level: 'mobiliser', designation: 'Unit Promoter',
       upline_user_id: adminId,
     });
     const mob = await db.prepare('SELECT * FROM members WHERE id = ?').get(mobMemberId);

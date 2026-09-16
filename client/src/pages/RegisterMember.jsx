@@ -7,7 +7,7 @@ import { useAuth } from '../App.jsx';
 const TITLES = ['Mr', 'Mrs', 'Miss', 'Dr', 'Engr', 'Chief', 'Alhaji', 'Alhaja', 'Pastor', 'Imam'];
 const DESIGNATIONS = [
   'None',
-  'Polling Unit Agent', 'Ward Supervisor', 'Community Mobiliser', 'Youth Leader',
+  'Polling Unit Agent', 'Ward Supervisor', 'Unit Promoter', 'Youth Leader',
   'Women Leader',
 ];
 
@@ -314,7 +314,7 @@ export default function RegisterMember() {
   if (!geo.levels.length) {
     return (
       <Alert type="warn" title="Your account cannot register members. ">
-        Registration is carried out by Candidates and Mobilisers.
+        Registration is carried out by Candidates and Unit Promoters.
         Contact the programme office if this is wrong.
       </Alert>
     );

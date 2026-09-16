@@ -118,12 +118,12 @@ export function timeAgo(iso) {
 }
 
 export const LEVEL_LABEL = {
-  mobiliser: 'Mobiliser',
+  mobiliser: 'Unit Promoter',
 };
 
 export const ROLE_LABEL = {
   superadmin: 'Super Administrator',
   admin: 'Administrator',
   candidate: 'Candidate',
-  mobiliser: 'Mobiliser',
+  mobiliser: 'Unit Promoter',
 };

@@ -188,7 +188,7 @@ function CandidateDashboard({ data, me }) {
       <OperationalReport data={data} />
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="Your network" note="People currently registered under you, by role">
-          <Bar label="Mobilisers" value={levels.mobiliser || 0} max={Math.max(levels.mobiliser || 0, 10)}
+          <Bar label="Unit Promoters" value={levels.mobiliser || 0} max={Math.max(levels.mobiliser || 0, 10)}
                display={num(levels.mobiliser || 0)} />
         </Card>
         <Card title="Next actions" note="Keep the network moving">
@@ -198,7 +198,7 @@ function CandidateDashboard({ data, me }) {
           </div>
           <Alert type="info">
             {pendingReview ? 'Review pending submissions so approved work can release points.'
-              : 'Keep registering mobilisers across your assigned area.'}
+              : 'Keep registering Unit Promoters across your assigned area.'}
           </Alert>
         </Card>
       </div>
@@ -378,7 +378,7 @@ export default function Dashboard() {
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="10X network structure"
               note="Each level activates at least 10 people at the level below">
-          <Bar label="Mobilisers" value={levelMap.mobiliser || 0} max={3510}
+          <Bar label="Unit Promoters" value={levelMap.mobiliser || 0} max={3510}
                display={num(levelMap.mobiliser || 0) + ' / 3,510'} />
         </Card>
 

@@ -430,7 +430,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   if (ownPollingUnit && (b.lga !== ownPollingUnit.lga
       || b.ward !== ownPollingUnit.ward
       || b.polling_unit !== ownPollingUnit.pollingUnit)) {
-    return res.status(403).json({ error: 'Mobilisers can only register people in their own polling unit' });
+    return res.status(403).json({ error: 'Unit Promoters can only register people in their own polling unit' });
   }
 
   const result = await registerMemberRow(b, {
@@ -478,7 +478,7 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
         || merged.ward !== ownPollingUnit.ward
         || merged.polling_unit !== ownPollingUnit.pollingUnit)) {
       results.push({ ok: false, status: 403,
-        error: 'Mobilisers can only register people in their own polling unit', input: row });
+        error: 'Unit Promoters can only register people in their own polling unit', input: row });
       continue;
     }
     const r = await registerMemberRow(merged, {
@@ -1040,7 +1040,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
     return res.status(400).json({ error: 'Unsupported user role' });
   }
   if (!LOGIN_CREATION_ROLES.has(String(b.role).trim())) {
-    return res.status(400).json({ error: 'Mobiliser accounts must be created from Add network' });
+    return res.status(400).json({ error: 'Unit Promoter accounts must be created from Add network' });
   }
   const exists = await db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(b.username);
   if (exists) return res.status(409).json({ error: 'That username is already taken' });
@@ -1051,7 +1051,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
     const [lga, ward, pollingUnit] = String(b.scope_value || '').split('|');
     if (!phone || !lga || !ward || !pollingUnit) {
       return res.status(400).json({
-        error: 'Mobiliser accounts require phone, LGA, ward and polling unit',
+        error: 'Unit Promoter accounts require phone, LGA, ward and polling unit',
       });
     }
     const nameParts = String(b.full_name).trim().split(/\s+/);
@@ -1062,7 +1062,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
         'INSERT INTO members (code,first_name,last_name,phone,designation,lga,ward,polling_unit,level,'
         + 'upline_user_id,status,checks_json,risk_score,risk_flags,created_at) '
         + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).run(referralCode('OYO'), firstName, lastName, phone, 'Community Mobiliser',
+      ).run(referralCode('OYO'), firstName, lastName, phone, 'Unit Promoter',
         lga, ward, pollingUnit, 'mobiliser', req.user.id, 'pending', '{}', 0, '[]', nowISO());
       const memberId = Number(member.lastInsertRowid);
       const user = await tx.prepare(
@@ -1169,7 +1169,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   const existingUser = await db.prepare('SELECT role FROM users WHERE id = ?').get(req.params.id);
   if (!existingUser) return res.status(404).json({ error: 'Login not found' });
   if (b.role === 'mobiliser' && existingUser.role !== 'mobiliser') {
-    return res.status(400).json({ error: 'Mobiliser accounts must be created from Add network' });
+    return res.status(400).json({ error: 'Unit Promoter accounts must be created from Add network' });
   }
   const office = b.role === 'candidate' ? (b.office || null) : null;
   await db.prepare(
@@ -1191,7 +1191,7 @@ app.post('/api/users/:id/coordinator', authenticate, requireAdmin, wrap(async (r
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Login not found' });
   if (target.role !== 'mobiliser') {
-    return res.status(400).json({ error: 'Only a Mobiliser can be appointed Coordinator' });
+    return res.status(400).json({ error: 'Only a Unit Promoter can be appointed Coordinator' });
   }
 
   const makeCoordinator = req.body?.is_coordinator !== false;

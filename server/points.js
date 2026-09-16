@@ -15,7 +15,7 @@ import { db, period as currentPeriod, nowISO } from './db.js';
 export const NAIRA_PER_POINT = 100;
 
 export const LEVEL_CAPS = {
-  mobiliser:   { points: 100, naira: 10000, label: 'Mobiliser' },
+  mobiliser:   { points: 100, naira: 10000, label: 'Unit Promoter' },
 };
 
 // Activity point values (programme document, Mobiliser Points table).

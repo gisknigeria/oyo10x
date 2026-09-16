@@ -200,8 +200,8 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
       <div className="grid grid-2">
         <Field label="Who must do this">
           <select value={t.target_level} onChange={set('target_level')}>
-            <option value="all">All Mobilisers</option>
-            <option value="mobiliser">Mobilisers only</option>
+            <option value="all">All Unit Promoters</option>
+            <option value="mobiliser">Unit Promoters only</option>
           </select>
         </Field>
         <Field label="Where">

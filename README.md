@@ -41,7 +41,7 @@ npm start
 
 The seed creates all **51 candidate logins** (Governor, Deputy Governor,
 3 Senators, 14 Representatives, 32 Assembly members) plus demonstration
-Mobiliser accounts for three LGAs.
+Unit Promoter accounts for three LGAs.
 
 Useful demo logins: `gov.oyo`, `sen.oyo-central`, `rep.ibadan-north`,
 `mob.ibadan-north`.
@@ -70,13 +70,13 @@ SQL, not hidden in the UI:
 | Senator | The LGAs of their senatorial district |
 | House of Representatives | The LGAs of their federal constituency |
 | House of Assembly | Their state constituency |
-| Mobiliser | Only their own branch of the network |
+| Unit Promoter | Only their own branch of the network |
 | Participant | Their own record |
 
 ### 3. The 10X network
 
 Every member is linked to the person who activated them, forming a tree:
-**Mobiliser → Community Participant**. The network page renders the tree and
+**Unit Promoter**. The network page renders the tree and
 marks who has met the baseline of 10 activations.
 
 ### 4. Tasks
@@ -95,7 +95,7 @@ This is the core rule. A member is paid for a month only when **all three** pass
 3. **Downline** — every one of their verified downline members has also cleared
    their mandatory tasks.
 
-Points are then capped at 100 points per mobiliser per month and converted at
+Points are then capped at 100 points per Unit Promoter per month and converted at
 **1 point = ₦100**. Recruitment alone earns nothing: the
 first 10 activations are the baseline requirement worth zero points, and only
 verified activations *above* 10 earn 2 bonus points each.

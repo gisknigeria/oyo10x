@@ -101,7 +101,7 @@ function NewUser({ geo, onClose, onSaved }) {
       {error && <Alert type="error">{error}</Alert>}
       <Alert type="info">
         A password is generated automatically and shown once. The account
-        holder can sign in immediately. Mobiliser accounts are created from
+        holder can sign in immediately. Unit Promoter accounts are created from
         the Add network page so they are linked to a member profile.
       </Alert>
 
@@ -281,7 +281,7 @@ function CoordinatorModal({ user, geo, onClose, onSaved }) {
     }>
       {error && <Alert type="error">{error}</Alert>}
       <Alert type="info">
-        A Coordinator keeps adding people like any Mobiliser, but can also see
+        A Coordinator keeps adding people like any Unit Promoter, but can also see
         and review everyone registered across the area you assign here —
         not just the people they personally added.
       </Alert>
@@ -358,7 +358,7 @@ function ExportCredentialsModal({ onClose }) {
         <select value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="all">Everyone (except super administrators)</option>
           <option value="candidate">Candidates only</option>
-          <option value="mobiliser">Mobilisers only</option>
+          <option value="mobiliser">Unit Promoters only</option>
           <option value="admin">Administrators only</option>
         </select>
       </Field>
@@ -455,7 +455,7 @@ export default function Users() {
         <Stat label="Total logins" value={num(rows.length)} accent />
         <Stat label="Candidates" value={num(byRole.candidate || 0)}
               foot="Gov, Deputy, Senators, Reps, Assembly" />
-        <Stat label="Mobilisers" value={num(byRole.mobiliser || 0)}
+        <Stat label="Unit Promoters" value={num(byRole.mobiliser || 0)}
               foot={num(rows.filter((u) => u.is_coordinator).length) + ' appointed coordinator'} />
         <Stat label="Suspended"
               value={num(rows.filter((u) => u.status !== 'active').length)} />

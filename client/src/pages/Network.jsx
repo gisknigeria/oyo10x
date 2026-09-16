@@ -73,7 +73,7 @@ export default function Network() {
       <div className="grid grid-3" style={{ marginBottom: 16 }}>
         <Stat label="People in view" value={num(flat.length)}
               foot="Across up to four levels" accent />
-        <Stat label="Mobilisers" value={num(byLevel.mobiliser || 0)} />
+        <Stat label="Unit Promoters" value={num(byLevel.mobiliser || 0)} />
       </div>
 
       <Alert type="info">
