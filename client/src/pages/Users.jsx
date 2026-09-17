@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL } from '../lib/api.js';
+import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL, normalizeRole } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
+import { useAuth } from '../App.jsx';
 
 const ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot'];
 const EDIT_ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot', 'mobiliser'];
@@ -507,6 +508,7 @@ function PasswordResetRequests() {
 }
 
 export default function Users() {
+  const { me } = useAuth();
   const [rows, setRows] = useState(null);
   const [geo, setGeo] = useState(null);
   const [error, setError] = useState('');
@@ -517,6 +519,7 @@ export default function Users() {
   const [promoting, setPromoting] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [q, setQ] = useState('');
+  const isDg = normalizeRole(me.user.role) === 'campaign_admin';
 
   const load = () => api.get('/users').then((d) => setRows(d.rows)).catch((e) => setError(e.message));
   useEffect(() => { load(); api.get('/geo').then(setGeo).catch(() => {}); }, []);
@@ -644,6 +647,7 @@ export default function Users() {
               <thead>
                 <tr>
                   <th>Username</th><th>Name</th><th>Role / Office</th>
+                  <th>Nominated by</th>
                   <th>Sees</th><th className="num">Registered</th>
                   <th>Last login</th><th>Status</th><th></th>
                 </tr>
@@ -661,6 +665,10 @@ export default function Users() {
                       {u.role === 'candidate' && u.office && (
                         <div className="muted" style={{ fontSize: 12 }}>{u.office}</div>
                       )}
+                    </td>
+                    <td className="muted">
+                      {u.upline_name || (u.role === 'candidate' ? '—' : 'Not recorded')}
+                      {u.upline_username && <div className="mono" style={{ fontSize: 11 }}>{u.upline_username}</div>}
                     </td>
                     <td className="muted">
                       {u.role === 'mobiliser' && !u.is_coordinator ? (
@@ -690,6 +698,7 @@ export default function Users() {
                     </td>
                     <td><Status value={u.status} /></td>
                     <td>
+                      {!isDg && (
                       <div className="btn-row">
                         <button className="btn sm secondary" onClick={() => setEditing(u)}>Edit</button>
                         {u.role === 'mobiliser' && (
@@ -717,6 +726,7 @@ export default function Users() {
                           </>
                         )}
                       </div>
+                      )}
                     </td>
                   </tr>
                 ))}

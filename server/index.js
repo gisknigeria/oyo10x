@@ -205,6 +205,7 @@ const isGovernor = (user) => isCandidateRole(user.role) && user.office === 'Gove
 // disparities/challenges reports: leadership (admin/superadmin) and the
 // Governor specifically -- not other candidates, who only see their own.
 const canSeeCompliance = (user) => ADMIN_ROLES.has(normaliseRole(user.role)) || isGovernor(user);
+const isDg = (user) => normaliseRole(user.role) === 'campaign_admin';
 
 async function nominationStatus(candidateUserId, office) {
   const quota = nominationQuota(office);
@@ -611,6 +612,10 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   const isDelegatedNomination = level === 'mobiliser' && delegatedCandidateId > 0;
   let nominationOwner = req.user;
 
+  if (level === 'mobiliser' && isDg(req.user) && !delegatedCandidateId) {
+    return res.status(400).json({ error: 'Select the candidate this nominee is being added for' });
+  }
+
   if (isDelegatedNomination) {
     if (normaliseRole(req.user.role) !== 'campaign_admin') {
       return res.status(403).json({ error: 'Only the DG can nominate on behalf of a candidate' });
@@ -664,6 +669,10 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
   const rows = Array.isArray(b.rows) ? b.rows : [];
   const delegatedCandidateId = Number(b.candidate_id || 0);
   let nominationOwner = req.user;
+
+  if (level === 'mobiliser' && isDg(req.user) && !delegatedCandidateId) {
+    return res.status(400).json({ error: 'Select the candidate this nominee is being added for' });
+  }
 
   if (level === 'mobiliser' && delegatedCandidateId > 0) {
     if (normaliseRole(req.user.role) !== 'campaign_admin') {
@@ -1376,6 +1385,10 @@ app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
   const rows = await db.prepare(
     'SELECT id,username,role,office,full_name,phone,scope_type,scope_value,status,'
     + 'must_reset,last_login,created_at,is_coordinator,member_id,'
+    + '(SELECT full_name FROM users parent WHERE parent.id = '
+    + ' (SELECT upline_user_id FROM members m WHERE m.id = users.member_id)) upline_name,'
+    + '(SELECT username FROM users parent WHERE parent.id = '
+    + ' (SELECT upline_user_id FROM members m WHERE m.id = users.member_id)) upline_username,'
     + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered '
     + 'FROM users ORDER BY role, full_name'
   ).all();
@@ -1503,6 +1516,7 @@ app.post('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
 }));
 
 app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async (req, res) => {
+  if (isDg(req.user)) return res.status(403).json({ error: 'DG accounts cannot reset passwords' });
   const pw = tempPassword();
   await db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')
     .run(hashPassword(pw), req.params.id);
@@ -1562,6 +1576,7 @@ app.post('/api/admin/export-credentials', authenticate, requireAdmin, wrap(async
 }));
 
 app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) => {
+  if (isDg(req.user)) return res.status(403).json({ error: 'DG accounts cannot edit accounts' });
   const b = req.body || {};
   if (b.status !== undefined) {
     if (!['active', 'suspended'].includes(b.status)) {
@@ -1603,6 +1618,7 @@ app.patch('/api/users/:id', authenticate, requireAdmin, wrap(async (req, res) =>
  * ward/LGA without needing a separate registration step.
  */
 app.post('/api/users/:id/coordinator', authenticate, requireAdmin, wrap(async (req, res) => {
+  if (isDg(req.user)) return res.status(403).json({ error: 'DG accounts cannot change account permissions' });
   const target = await db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: 'Login not found' });
   if (!isUnitPromoterRole(target.role)) {

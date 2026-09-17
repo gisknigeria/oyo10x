@@ -21,7 +21,7 @@ const BLANK_ROW = { title: '', first_name: '', last_name: '', phone: '', pvc_no:
   bank_name: '', account_number: '', account_name: '' };
 const INITIAL_ROWS = 10;
 
-function BulkRegisterTable({ geo, lockedLocation, candidateId }) {
+function BulkRegisterTable({ geo, lockedLocation, candidateId, candidateRequired = false }) {
   const [level, setLevel] = useState(geo.levels[0] || '');
   const [lga, setLga] = useState(lockedLocation?.lga || '');
   const [ward, setWard] = useState(lockedLocation?.ward || '');
@@ -50,7 +50,8 @@ function BulkRegisterTable({ geo, lockedLocation, candidateId }) {
     .filter((r) => r.first_name.trim() || r.last_name.trim() || r.phone.trim());
 
   const ready = level && filledRows.length > 0
-    && filledRows.every((r) => r.first_name.trim() && r.last_name.trim() && r.phone.trim());
+    && filledRows.every((r) => r.first_name.trim() && r.last_name.trim() && r.phone.trim())
+    && (!candidateRequired || candidateId);
 
   const save = async () => {
     setBusy(true); setError(''); setResults(null);
@@ -215,9 +216,12 @@ function BulkRegisterTable({ geo, lockedLocation, candidateId }) {
 export default function RegisterMember() {
   const { me } = useAuth();
   const location = useLocation();
-  const candidateId = new URLSearchParams(location.search).get('candidate_id') || '';
+  const queryCandidateId = new URLSearchParams(location.search).get('candidate_id') || '';
   const [geo, setGeo] = useState(null);
+  const [nominationCandidates, setNominationCandidates] = useState([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState(queryCandidateId);
   const isCandidateFlow = normalizeRole(me.user.role) === 'candidate';
+  const isDg = normalizeRole(me.user.role) === 'campaign_admin';
   const [mode, setMode] = useState('single');
   const [form, setForm] = useState(BLANK);
   const [gps, setGps] = useState(null);
@@ -243,6 +247,11 @@ export default function RegisterMember() {
         ...(parts.length === 3 ? { lga: parts[0], ward: parts[1], polling_unit: parts[2] } : {}) }));
     }).catch((e) => setError(e.message));
   }, [location.search, me, isCandidateFlow]);
+
+  useEffect(() => {
+    if (isDg) api.get('/nominations').then((result) => setNominationCandidates(result.rows || []))
+      .catch(() => setNominationCandidates([]));
+  }, [isDg]);
 
   const set = (k) => (e) => {
     const v = e.target.value;
@@ -284,7 +293,7 @@ export default function RegisterMember() {
     setError('');
     setConflict(null);
     try {
-      const body = { ...form, ...(candidateId ? { candidate_id: candidateId } : {}), ...(gps || {}) };
+      const body = { ...form, ...(selectedCandidateId ? { candidate_id: selectedCandidateId } : {}), ...(gps || {}) };
       const res = await api.post('/members' + (force ? '?force=1' : ''), body);
       setResult(res);
       setForm({ ...BLANK, level: form.level, lga: form.lga, ward: form.ward,
@@ -323,8 +332,9 @@ export default function RegisterMember() {
     ? (() => { const [lga, ward, pollingUnit] = String(me.user.scope_value || '').split('|');
       return lga && ward && pollingUnit ? { lga, ward, pollingUnit } : null; })()
     : null;
-    const required = ['first_name', 'last_name', 'phone'];
-  const ready = required.every((k) => String(form[k] || '').trim());
+  const required = ['first_name', 'last_name', 'phone'];
+  const ready = required.every((k) => String(form[k] || '').trim())
+    && (!isDg || form.level !== 'mobiliser' || selectedCandidateId);
 
   const modeToggle = (
     <div className="pill-row" style={{ marginBottom: 14 }}>
@@ -339,7 +349,21 @@ export default function RegisterMember() {
     return (
       <>
         {modeToggle}
-        <BulkRegisterTable geo={geo} lockedLocation={lockedLocation} candidateId={candidateId} />
+        {isDg && form.level === 'mobiliser' && (
+          <Card title="Nominate for candidate" note="The selected candidate receives credit for these nominees.">
+            <select value={selectedCandidateId} onChange={(event) => setSelectedCandidateId(event.target.value)}>
+              <option value="">Select the candidate</option>
+              {nominationCandidates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.full_name} · {candidate.office} · {candidate.count}/{candidate.quota}
+                </option>
+              ))}
+            </select>
+          </Card>
+        )}
+        <BulkRegisterTable geo={geo} lockedLocation={lockedLocation}
+          candidateId={selectedCandidateId}
+          candidateRequired={isDg && form.level === 'mobiliser'} />
       </>
     );
   }
@@ -368,6 +392,18 @@ export default function RegisterMember() {
         </Modal>
       )}
       {modeToggle}
+      {isDg && form.level === 'mobiliser' && (
+        <Card title="Nominate for candidate" note="Every nominee added here counts against the selected candidate's fixed quota.">
+          <select value={selectedCandidateId} onChange={(event) => setSelectedCandidateId(event.target.value)}>
+            <option value="">Select the candidate</option>
+            {nominationCandidates.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.full_name} · {candidate.office} · {candidate.count}/{candidate.quota}
+              </option>
+            ))}
+          </select>
+        </Card>
+      )}
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 16 }}>
       <div>
         {result && (

@@ -13,7 +13,6 @@ import Network from './pages/Network.jsx';
 import Tasks from './pages/Tasks.jsx';
 import FieldWork from './pages/FieldWork.jsx';
 import DgWork from './pages/DgWork.jsx';
-import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
 import Compliance from './pages/Compliance.jsx';
 import MyNominations from './pages/MyNominations.jsx';
@@ -32,8 +31,6 @@ const NAV = [
   { group: 'Field work' },
   { to: '/register', label: 'Register network', icon: '＋', needs: 'register' },
   { to: '/tasks', label: 'Tasks & reports', icon: '✓' },
-  { group: 'Performance' },
-  { to: '/payroll', label: 'Points & payment', icon: '₦' },
   { group: 'Administration', admin: true },
   { to: '/users', label: 'Platform accounts', icon: '⚿', admin: true },
   { group: 'Oversight', needs: 'compliance' },
@@ -53,7 +50,7 @@ function Shell({ children }) {
   const canSeeCompliance = me.permissions.can_see_compliance;
 
   const visible = NAV.filter((item) => {
-    if (isAdmin && item.to && ['/network', '/register', '/payroll'].includes(item.to)) return false;
+    if (isAdmin && item.to && ['/network', '/register'].includes(item.to)) return false;
     if (isField && item.to && !['/', '/tasks', '/profile'].includes(item.to)) return false;
     if (isGovernorCandidate && item.to && item.to !== '/' && item.to !== '/profile') return false;
     if (item.admin && !isAdmin) return false;
@@ -267,7 +264,6 @@ export default function App() {
             : me.permissions.is_admin && normalizeRole(me.user.role) === 'campaign_admin'
               ? <Route path="/tasks" element={<DgWork />} />
             : !isGovernorCandidate && <Route path="/tasks" element={<Tasks />} />}
-          {!isField && !isGovernorCandidate && <Route path="/payroll" element={<Payroll />} />}
           {isAdmin && <Route path="/users" element={<Users />} />}
           {me.permissions.can_see_compliance && normalizeRole(me.user.role) !== 'campaign_admin'
             && <Route path="/compliance" element={<Compliance />} />}
