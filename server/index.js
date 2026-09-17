@@ -835,22 +835,27 @@ app.post('/api/disparity-report', authenticate, wrap(async (req, res) => {
   }
   const disparities = String(req.body?.disparities || '').trim();
   const challenges = String(req.body?.challenges || '').trim();
-  if (!disparities && !challenges) {
-    return res.status(400).json({ error: 'Describe at least one of the disparities or challenges' });
+  const positives = String(req.body?.positives || '').trim();
+  const lat = req.body?.lat == null ? null : Number(req.body.lat);
+  const lng = req.body?.lng == null ? null : Number(req.body.lng);
+  const accuracy = req.body?.accuracy == null ? null : Number(req.body.accuracy);
+  if (!disparities && !challenges && !positives) {
+    return res.status(400).json({ error: 'Describe at least one disparity, challenge, or positive progress item' });
   }
 
   const existing = await db.prepare('SELECT id FROM disparity_reports WHERE candidate_id = ?')
     .get(req.user.id);
   if (existing) {
     await db.prepare(
-      'UPDATE disparity_reports SET disparities = ?, challenges = ?, updated_at = ?, '
-      + 'reviewed_by = NULL, reviewed_at = NULL, review_note = NULL WHERE candidate_id = ?'
-    ).run(disparities, challenges, nowISO(), req.user.id);
+      'UPDATE disparity_reports SET disparities = ?, challenges = ?, positives = ?, updated_at = ?, '
+      + 'lat = ?, lng = ?, accuracy = ?, reviewed_by = NULL, reviewed_at = NULL, review_note = NULL '
+      + 'WHERE candidate_id = ?'
+    ).run(disparities, challenges, positives, nowISO(), lat, lng, accuracy, req.user.id);
   } else {
     await db.prepare(
-      'INSERT INTO disparity_reports (candidate_id, disparities, challenges, submitted_at) '
-      + 'VALUES (?,?,?,?)'
-    ).run(req.user.id, disparities, challenges, nowISO());
+      'INSERT INTO disparity_reports (candidate_id, disparities, challenges, positives, lat, lng, accuracy, submitted_at) '
+      + 'VALUES (?,?,?,?,?,?,?,?)'
+    ).run(req.user.id, disparities, challenges, positives, lat, lng, accuracy, nowISO());
   }
   await audit(req.user.id, req.user.username, 'disparity_report_submitted', 'user', req.user.id,
     null, ip(req));
@@ -1309,13 +1314,13 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
   ).get(...p);
 
   const recent = await db.prepare(
-    'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,created_at '
+    'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,risk_flags,created_at '
     + 'FROM members WHERE ' + scope.sql + ' ORDER BY created_at DESC LIMIT 25'
   ).all(...p);
 
   const peopleAdded = (isUnitPromoterRole(req.user.role) || isGrassrootRole(req.user.role))
     ? await db.prepare(
-      'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,created_at '
+      'SELECT id,code,first_name,last_name,phone,level,lga,ward,polling_unit,status,risk_score,risk_flags,created_at '
       + 'FROM members WHERE upline_user_id = ? ORDER BY created_at DESC LIMIT 100'
     ).all(req.user.id)
     : [];

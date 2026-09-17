@@ -8,6 +8,14 @@ import OperationalReport from '../components/OperationalReport.jsx';
 
 const FIELD_ROLES = new Set(['unit_promoter', 'mobiliser', 'grassroot']);
 
+function hasFlag(member, code) {
+  try {
+    return JSON.parse(member.risk_flags || '[]').some((flag) => flag.code === code);
+  } catch {
+    return false;
+  }
+}
+
 function DashboardHeading({ title, note }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -96,6 +104,11 @@ function PeopleWithLocation({ rows }) {
                     {m.risk_score >= 50 && (
                       <span className="badge red" style={{ marginLeft: 4 }}>risk {m.risk_score}</span>
                     )}
+                      {hasFlag(m, 'account_name_mismatch') && (
+                        <span className="badge amber" style={{ marginLeft: 4 }}>
+                          account name validation
+                        </span>
+                      )}
                   </td>
                   <td className="muted nowrap">{timeAgo(m.created_at)}</td>
                 </tr>
@@ -818,6 +831,11 @@ export default function Dashboard() {
                       {m.risk_score >= 50 && (
                         <span className="badge red" style={{ marginLeft: 4 }}>
                           risk {m.risk_score}
+                        </span>
+                      )}
+                      {hasFlag(m, 'account_name_mismatch') && (
+                        <span className="badge amber" style={{ marginLeft: 4 }}>
+                          account name validation
                         </span>
                       )}
                     </td>

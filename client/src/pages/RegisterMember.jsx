@@ -224,6 +224,7 @@ export default function RegisterMember() {
   const isDg = normalizeRole(me.user.role) === 'campaign_admin';
   const [mode, setMode] = useState('single');
   const [form, setForm] = useState(BLANK);
+  const [designationOther, setDesignationOther] = useState(false);
   const [gps, setGps] = useState(null);
   const [gpsState, setGpsState] = useState('idle');
   const [busy, setBusy] = useState(false);
@@ -269,24 +270,38 @@ export default function RegisterMember() {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
 
-  const captureGps = () => {
-    if (!navigator.geolocation) { setGpsState('unsupported'); return; }
+  const captureGps = () => new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      setGpsState('unsupported');
+      reject(new Error('Turn on location services before registering this member.'));
+      return;
+    }
     setGpsState('locating');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setGps({
+        const captured = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: Math.round(pos.coords.accuracy),
-        });
+        };
+        setGps(captured);
         setGpsState('ok');
+        resolve(captured);
       },
-      () => setGpsState('denied'),
+      () => {
+        setGpsState('denied');
+        reject(new Error('Turn on location services before registering this member.'));
+      },
       { enableHighAccuracy: true, timeout: 10000 }
     );
-  };
+  });
 
-  useEffect(() => { captureGps(); }, []);
+  useEffect(() => {
+    navigator.permissions?.query({ name: 'geolocation' })
+      .then((permission) => {
+        if (permission.state === 'granted') captureGps().catch(() => {});
+      }).catch(() => {});
+  }, []);
 
   const submit = async (force = false) => {
     setBusy(true);
@@ -455,9 +470,24 @@ export default function RegisterMember() {
                 </select>
               </Field>
               <Field label="Designation" hint="Optional role description">
-                <select value={form.designation} onChange={set('designation')}>
+                <select value={designationOther ? '__other__' : form.designation}
+                        onChange={(event) => {
+                          if (event.target.value === '__other__') {
+                            setDesignationOther(true);
+                            setForm((current) => ({ ...current, designation: '' }));
+                          } else {
+                            setDesignationOther(false);
+                            setForm((current) => ({ ...current, designation: event.target.value }));
+                          }
+                        }}>
                   {DESIGNATIONS.map((d) => <option key={d} value={d === 'None' ? '' : d}>{d}</option>)}
+                  <option value="__other__">Other (type your own)</option>
                 </select>
+                {designationOther && (
+                  <input type="text" value={form.designation}
+                         onChange={set('designation')}
+                         placeholder="Type the designation" style={{ marginTop: 8 }} />
+                )}
               </Field>
             </div>
             <div className="btn-row" style={{ marginBottom: 16 }}>
@@ -565,35 +595,6 @@ export default function RegisterMember() {
         </Card>
       </div>
 
-      <div>
-        <Card title="Location capture"
-              note="Attached to the record as field evidence">
-          {gpsState === 'ok' && gps ? (
-            <>
-              <div className="kv">
-                <dt>Latitude</dt><dd className="mono">{gps.lat.toFixed(5)}</dd>
-                <dt>Longitude</dt><dd className="mono">{gps.lng.toFixed(5)}</dd>
-                <dt>Accuracy</dt><dd>±{gps.accuracy} m</dd>
-              </div>
-              <div style={{ marginTop: 10 }}>
-                <span className="badge green"><span className="dot" />Location captured</span>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="muted" style={{ fontSize: 13 }}>
-                {gpsState === 'locating' && 'Finding your location...'}
-                {gpsState === 'denied' && 'Location permission was declined. The record will be saved without GPS and flagged for review.'}
-                {gpsState === 'unsupported' && 'This browser does not support location capture.'}
-                {gpsState === 'idle' && 'Location not captured yet.'}
-              </p>
-              <button className="btn sm secondary" style={{ marginTop: 10 }}
-                      onClick={captureGps}>Try again</button>
-            </>
-          )}
-        </Card>
-
-      </div>
     </div>
     </>
   );

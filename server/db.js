@@ -226,6 +226,10 @@ CREATE TABLE IF NOT EXISTS disparity_reports (
   candidate_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
   disparities  TEXT,
   challenges   TEXT,
+  positives    TEXT,
+  lat          REAL,
+  lng          REAL,
+  accuracy     REAL,
   submitted_at TEXT NOT NULL,
   updated_at   TEXT,
   reviewed_by  INTEGER REFERENCES users(id),
@@ -264,6 +268,10 @@ for (const [table, column, type] of [
   // (everyone in that area, not just people they personally added) rather
   // than a separate registration tier.
   ['users', 'is_coordinator', 'INTEGER NOT NULL DEFAULT 0'],
+  ['disparity_reports', 'lat', 'REAL'],
+  ['disparity_reports', 'lng', 'REAL'],
+  ['disparity_reports', 'accuracy', 'REAL'],
+  ['disparity_reports', 'positives', 'TEXT'],
 ]) {
   try {
     await db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type);

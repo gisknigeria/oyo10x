@@ -30,19 +30,31 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   const [error, setError] = useState('');
   const [location, setLocation] = useState({ lat: null, lng: null, accuracy: null });
 
-  useEffect(() => {
+  const captureLocation = () => new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      setError('This browser does not support location. GPS is required to submit tasks.');
+      reject(new Error('Turn on location services before submitting this task.'));
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => setLocation({
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        accuracy: pos.coords.accuracy,
-      }),
-      () => setError('Location access was blocked. Please allow location access before submitting this task.')
+      (pos) => {
+        const captured = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        };
+        setLocation(captured);
+        resolve(captured);
+      },
+      () => reject(new Error('Turn on location services before submitting this task.')),
+      { enableHighAccuracy: true, timeout: 10000 }
     );
+  });
+
+  useEffect(() => {
+    navigator.permissions?.query({ name: 'geolocation' })
+      .then((permission) => {
+        if (permission.state === 'granted') captureLocation().catch(() => {});
+      }).catch(() => {});
   }, [task]);
 
   const setAnswer = (qid, value) => {
@@ -52,20 +64,15 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   const submit = async () => {
     setBusy(true); setError('');
     try {
-      if (location.lat == null || location.lng == null) {
-        setError('GPS location is required before submitting this task.');
-        setBusy(false);
-        return;
-      }
+      const capturedLocation = location.lat != null && location.lng != null
+        ? location : await captureLocation();
       const form = new FormData();
       if (me?.user?.member_id) form.append('member_id', String(me.user.member_id));
       form.append('answers', JSON.stringify(answers));
       if (note) form.append('note', note);
-      if (location.lat != null && location.lng != null) {
-        form.append('lat', String(location.lat));
-        form.append('lng', String(location.lng));
-        if (location.accuracy != null) form.append('accuracy', String(location.accuracy));
-      }
+      form.append('lat', String(capturedLocation.lat));
+      form.append('lng', String(capturedLocation.lng));
+      if (capturedLocation.accuracy != null) form.append('accuracy', String(capturedLocation.accuracy));
       await api.form('/tasks/' + task.id + '/submit', form);
       onSubmitted();
     } catch (e) {
@@ -108,14 +115,6 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
           )}
         </Field>
       ))}
-
-      <div className="card" style={{ padding: 10, marginBottom: 12 }}>
-        <div className="muted" style={{ fontSize: 12 }}>
-          {location.lat != null && location.lng != null
-            ? `Location captured: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
-            : 'Capturing your current location... GPS is required to submit.'}
-        </div>
-      </div>
 
       <Field label="Notes">
         <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note for the reviewer" />

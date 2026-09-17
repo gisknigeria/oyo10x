@@ -7,6 +7,14 @@ const STATUSES = ['', 'pending', 'verified', 'flagged', 'rejected'];
 const LEVELS = ['', 'mobiliser'];
 const PAGE = 100;
 
+function hasFlag(member, code) {
+  try {
+    return JSON.parse(member.risk_flags || '[]').some((flag) => flag.code === code);
+  } catch {
+    return false;
+  }
+}
+
 export default function Members() {
   const [geo, setGeo] = useState(null);
   const [data, setData] = useState(null);
@@ -113,6 +121,11 @@ export default function Members() {
                         {m.risk_score >= 50 && (
                           <span className="badge red" style={{ marginLeft: 4 }}>
                             risk {m.risk_score}
+                          </span>
+                        )}
+                        {hasFlag(m, 'account_name_mismatch') && (
+                          <span className="badge amber" style={{ marginLeft: 4 }}>
+                            account name validation
                           </span>
                         )}
                       </td>

@@ -167,6 +167,10 @@ function ReviewModal({ report, onClose, onSaved }) {
       <p style={{ whiteSpace: 'pre-wrap', fontSize: 13.5 }}>
         {report.challenges || <span className="muted">Nothing submitted</span>}
       </p>
+      <div className="section-title">Positives and progress</div>
+      <p style={{ whiteSpace: 'pre-wrap', fontSize: 13.5 }}>
+        {report.positives || <span className="muted">Nothing submitted</span>}
+      </p>
       <Field label="Review note" hint="Visible to the candidate">
         <textarea value={note} onChange={(e) => setNote(e.target.value)}
                   placeholder="Optional note back to the candidate" />
