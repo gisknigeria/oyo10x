@@ -607,6 +607,22 @@ async function registerMemberRow(b, opts) {
 app.post('/api/members', authenticate, wrap(async (req, res) => {
   const b = registrationLocation(req.user, req.body || {});
   const level = b.level || canRegisterLevels(req.user)[0];
+  const delegatedCandidateId = Number(b.candidate_id || 0);
+  const isDelegatedNomination = level === 'mobiliser' && delegatedCandidateId > 0;
+  let nominationOwner = req.user;
+
+  if (isDelegatedNomination) {
+    if (normaliseRole(req.user.role) !== 'campaign_admin') {
+      return res.status(403).json({ error: 'Only the DG can nominate on behalf of a candidate' });
+    }
+    nominationOwner = await db.prepare(
+      "SELECT id, role, office, member_id FROM users WHERE id = ? AND role = 'candidate' AND status = 'active'"
+    ).get(delegatedCandidateId);
+    if (!nominationOwner) return res.status(404).json({ error: 'Candidate not found' });
+    const status = await nominationStatus(nominationOwner.id, nominationOwner.office);
+    if (!status) return res.status(400).json({ error: 'This candidate has no fixed nominee quota' });
+    if (status.remaining <= 0) return res.status(409).json({ error: 'This candidate has reached the nominee quota' });
+  }
 
   if (!canRegisterLevels(req.user).includes(level)) {
     return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
@@ -622,7 +638,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
   }
 
   const result = await registerMemberRow(b, {
-    level, uplineUserId: req.user.id, uplineMemberId: req.user.member_id,
+    level, uplineUserId: nominationOwner.id, uplineMemberId: nominationOwner.member_id,
     force: req.query.force === '1', dryRun: req.query.dry_run === '1',
   });
 
@@ -646,6 +662,23 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
   const b = registrationLocation(req.user, req.body || {});
   const level = b.level || canRegisterLevels(req.user)[0];
   const rows = Array.isArray(b.rows) ? b.rows : [];
+  const delegatedCandidateId = Number(b.candidate_id || 0);
+  let nominationOwner = req.user;
+
+  if (level === 'mobiliser' && delegatedCandidateId > 0) {
+    if (normaliseRole(req.user.role) !== 'campaign_admin') {
+      return res.status(403).json({ error: 'Only the DG can nominate on behalf of a candidate' });
+    }
+    nominationOwner = await db.prepare(
+      "SELECT id, role, office, member_id FROM users WHERE id = ? AND role = 'candidate' AND status = 'active'"
+    ).get(delegatedCandidateId);
+    if (!nominationOwner) return res.status(404).json({ error: 'Candidate not found' });
+    const status = await nominationStatus(nominationOwner.id, nominationOwner.office);
+    if (!status) return res.status(400).json({ error: 'This candidate has no fixed nominee quota' });
+    if (rows.length > status.remaining) {
+      return res.status(409).json({ error: 'This submission exceeds the candidate nominee quota of ' + status.quota });
+    }
+  }
 
   if (!canRegisterLevels(req.user).includes(level)) {
     return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
@@ -670,7 +703,7 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
       continue;
     }
     const r = await registerMemberRow(merged, {
-      level, uplineUserId: req.user.id, uplineMemberId: req.user.member_id,
+      level, uplineUserId: nominationOwner.id, uplineMemberId: nominationOwner.member_id,
       force: req.query.force === '1',
     });
     if (!r.ok) r.input = row;

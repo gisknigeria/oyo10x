@@ -21,7 +21,7 @@ const BLANK_ROW = { title: '', first_name: '', last_name: '', phone: '', pvc_no:
   bank_name: '', account_number: '', account_name: '' };
 const INITIAL_ROWS = 10;
 
-function BulkRegisterTable({ geo, lockedLocation }) {
+function BulkRegisterTable({ geo, lockedLocation, candidateId }) {
   const [level, setLevel] = useState(geo.levels[0] || '');
   const [lga, setLga] = useState(lockedLocation?.lga || '');
   const [ward, setWard] = useState(lockedLocation?.ward || '');
@@ -57,6 +57,7 @@ function BulkRegisterTable({ geo, lockedLocation }) {
     try {
       const res = await api.post('/members/bulk', {
         level, lga, ward, polling_unit: pollingUnit,
+        ...(candidateId ? { candidate_id: candidateId } : {}),
         rows: filledRows.map(({ _index, ...r }) => r),
       });
       setResults(res.rows.map((r, i) => ({ ...r, input: filledRows[i] })));
@@ -214,6 +215,7 @@ function BulkRegisterTable({ geo, lockedLocation }) {
 export default function RegisterMember() {
   const { me } = useAuth();
   const location = useLocation();
+  const candidateId = new URLSearchParams(location.search).get('candidate_id') || '';
   const [geo, setGeo] = useState(null);
   const isCandidateFlow = normalizeRole(me.user.role) === 'candidate';
   const [mode, setMode] = useState('single');
@@ -282,7 +284,7 @@ export default function RegisterMember() {
     setError('');
     setConflict(null);
     try {
-      const body = { ...form, ...(gps || {}) };
+      const body = { ...form, ...(candidateId ? { candidate_id: candidateId } : {}), ...(gps || {}) };
       const res = await api.post('/members' + (force ? '?force=1' : ''), body);
       setResult(res);
       setForm({ ...BLANK, level: form.level, lga: form.lga, ward: form.ward,
@@ -337,7 +339,7 @@ export default function RegisterMember() {
     return (
       <>
         {modeToggle}
-        <BulkRegisterTable geo={geo} lockedLocation={lockedLocation} />
+        <BulkRegisterTable geo={geo} lockedLocation={lockedLocation} candidateId={candidateId} />
       </>
     );
   }

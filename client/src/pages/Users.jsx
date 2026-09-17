@@ -425,7 +425,7 @@ function PasswordResetRequests() {
 
   const load = () => api.get('/admin/password-reset-requests')
     .then((d) => setRows(d.rows)).catch((e) => setError(e.message));
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const approve = async (r) => {
     setBusy(r.id);

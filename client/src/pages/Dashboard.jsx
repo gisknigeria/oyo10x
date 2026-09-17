@@ -250,13 +250,18 @@ const candidateScopeType = (office) => {
 function DgAddPanel() {
   const [tab, setTab] = useState('candidate');
   const [geo, setGeo] = useState(null);
+  const [nominationRows, setNominationRows] = useState([]);
+  const [candidateId, setCandidateId] = useState('');
   const [rows, setRows] = useState([{ full_name: '', office: 'Senator', scope_value: '' }]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null);
 
-  useEffect(() => { api.get('/geo').then(setGeo).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get('/geo').then(setGeo).catch(() => {});
+    api.get('/nominations').then((result) => setNominationRows(result.rows || [])).catch(() => {});
+  }, []);
 
   const options = (office) => {
     if (!geo) return [];
@@ -340,8 +345,29 @@ function DgAddPanel() {
         </>
       ) : (
         <>
-          <p className="muted">Add Unit Promoters for candidates one at a time or in bulk. Each nominee receives a login automatically.</p>
-          <Link className="btn" to="/register?level=unit_promoter">Open nominee registration</Link>
+          <p className="muted">Select the candidate whose list you received. Every nominee will count against that candidate's fixed quota.</p>
+          <div className="grid grid-2" style={{ marginBottom: 12 }}>
+            <label>Candidate
+              <select value={candidateId} onChange={(event) => setCandidateId(event.target.value)}>
+                <option value="">Select a candidate</option>
+                {nominationRows.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.full_name} · {row.office} · {row.count}/{row.quota}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="hint" style={{ alignSelf: 'end' }}>
+              {candidateId
+                ? 'Nominees will be recorded under the selected candidate.'
+                : 'Choose a candidate before opening registration.'}
+            </div>
+          </div>
+          <Link className="btn" to={candidateId
+            ? '/register?level=unit_promoter&candidate_id=' + candidateId
+            : '#'} onClick={(event) => { if (!candidateId) event.preventDefault(); }}>
+            Open nominee registration
+          </Link>
         </>
       )}
     </Card>
