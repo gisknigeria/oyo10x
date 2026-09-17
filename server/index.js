@@ -140,6 +140,15 @@ function canRegisterLevels(user) {
   return [];
 }
 
+function memberLevel(value) {
+  return normaliseRole(value) === 'unit_promoter' ? 'mobiliser'
+    : normaliseRole(value) === 'grassroot' ? 'grassroot' : value;
+}
+
+function canRegisterLevel(user, level) {
+  return canRegisterLevels(user).some((allowed) => normaliseRole(allowed) === normaliseRole(level));
+}
+
 function mobiliserPollingUnit(user) {
   if ((!isUnitPromoterRole(user.role) && !isGrassrootRole(user.role)) || Number(user.is_coordinator)) return null;
   const [lga, ward, pollingUnit] = String(user.scope_value || '').split('|');
@@ -607,7 +616,7 @@ async function registerMemberRow(b, opts) {
 
 app.post('/api/members', authenticate, wrap(async (req, res) => {
   const b = registrationLocation(req.user, req.body || {});
-  const level = b.level || canRegisterLevels(req.user)[0];
+  const level = memberLevel(b.level || canRegisterLevels(req.user)[0]);
   const delegatedCandidateId = Number(b.candidate_id || 0);
   const isDelegatedNomination = level === 'mobiliser' && delegatedCandidateId > 0;
   let nominationOwner = req.user;
@@ -629,7 +638,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
     if (status.remaining <= 0) return res.status(409).json({ error: 'This candidate has reached the nominee quota' });
   }
 
-  if (!canRegisterLevels(req.user).includes(level)) {
+  if (!canRegisterLevel(req.user, level)) {
     return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
   }
   if (b.lga && b.lga !== 'Not specified' && !scopedLgas(req.user).includes(b.lga)) {
@@ -665,7 +674,7 @@ app.post('/api/members', authenticate, wrap(async (req, res) => {
  */
 app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
   const b = registrationLocation(req.user, req.body || {});
-  const level = b.level || canRegisterLevels(req.user)[0];
+  const level = memberLevel(b.level || canRegisterLevels(req.user)[0]);
   const rows = Array.isArray(b.rows) ? b.rows : [];
   const delegatedCandidateId = Number(b.candidate_id || 0);
   let nominationOwner = req.user;
@@ -689,7 +698,7 @@ app.post('/api/members/bulk', authenticate, wrap(async (req, res) => {
     }
   }
 
-  if (!canRegisterLevels(req.user).includes(level)) {
+  if (!canRegisterLevel(req.user, level)) {
     return res.status(403).json({ error: 'You cannot register members at the "' + level + '" level' });
   }
   if (!rows.length) return res.status(400).json({ error: 'No rows to save' });

@@ -557,7 +557,7 @@ function FieldDashboard({ data, me }) {
     <>
       <DashboardHeading
         title="Your field dashboard"
-        note={'Focused on ' + (me.user.scope_value || 'your assigned network') + '. Add Grassroots, complete tasks, and watch verification status.'}
+        note={'Focused on ' + (me.user.scope_value || 'your assigned network') + '. Add Grassroots and complete your assigned tasks.'}
       />
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Your registrations" value={num(totals.total)} accent
