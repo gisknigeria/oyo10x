@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, num, pct, timeAgo, LEVEL_LABEL, isCandidateRole, normalizeRole } from '../lib/api.js';
-import { Card, Stat, Status, Loading, Empty, Bar, Alert } from '../components/ui.jsx';
+import { Card, Stat, Status, Loading, Empty, Bar, Alert, Modal } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 import Verification from './Verification.jsx';
 import OperationalReport from '../components/OperationalReport.jsx';
@@ -236,6 +236,118 @@ function CandidateNominationTracker({ rows = [] }) {
   );
 }
 
+const CANDIDATE_OFFICES = ['Governor', 'Deputy Governor', 'Senator',
+  'House of Representatives', 'House of Assembly'];
+const candidateScopeType = (office) => {
+  const value = String(office || '').toLowerCase();
+  if (value.includes('governor')) return 'state';
+  if (value.includes('senator')) return 'senatorial';
+  if (value.includes('representative')) return 'federal';
+  if (value.includes('assembly')) return 'state_const';
+  return 'state';
+};
+
+function DgAddPanel() {
+  const [tab, setTab] = useState('candidate');
+  const [geo, setGeo] = useState(null);
+  const [rows, setRows] = useState([{ full_name: '', office: 'Senator', scope_value: '' }]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [created, setCreated] = useState(null);
+
+  useEffect(() => { api.get('/geo').then(setGeo).catch(() => {}); }, []);
+
+  const options = (office) => {
+    if (!geo) return [];
+    const type = candidateScopeType(office);
+    return type === 'state' ? [] : type === 'senatorial' ? geo.senatorial
+      : type === 'federal' ? geo.federal : geo.state_const;
+  };
+  const setRow = (index, patch) => setRows((items) => items.map((row, i) => i === index ? { ...row, ...patch } : row));
+  const addRow = () => setRows((items) => [...items, { full_name: '', office: 'Senator', scope_value: '' }]);
+  const saveCandidates = async () => {
+    const filled = rows.filter((row) => row.full_name.trim());
+    if (!filled.length) return setError('Add at least one candidate name.');
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const accounts = await Promise.all(filled.map((row) => api.post('/users', {
+        role: 'candidate', full_name: row.full_name.trim(), office: row.office,
+        scope_type: candidateScopeType(row.office), scope_value: row.scope_value,
+      })));
+      setRows([{ full_name: '', office: 'Senator', scope_value: '' }]);
+      setCreated(accounts);
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card title="Add to the platform" note="Add candidates individually or in a table, or register Unit Promoters for candidates.">
+      {created && (
+        <Modal title="Candidate accounts created" onClose={() => setCreated(null)} footer={
+          <div className="btn-row">
+            <button className="btn sm secondary" title="Copy all login details"
+              aria-label="Copy all login details" onClick={() => navigator.clipboard?.writeText(
+                'Login link: ' + window.location.origin + '/login\n'
+                + created.map((account) => 'Username: ' + account.username + '\nPassword: ' + account.password).join('\n'))}>
+              ⧉ Copy all login details
+            </button>
+            <button className="btn secondary" onClick={() => setCreated(null)}>Done</button>
+          </div>
+        }>
+          <Alert type="success" title="Share these details now. They are shown only once.">
+            {created.map((account) => (
+              <div key={account.username} style={{ marginBottom: 10 }}>
+                <strong>{account.username}</strong><br />
+                Temporary password: <code>{account.password}</code>
+              </div>
+            ))}
+            Login link: <code>{window.location.origin + '/login'}</code>
+          </Alert>
+        </Modal>
+      )}
+      <div className="tabs" style={{ marginBottom: 14 }}>
+        <button className={'tab' + (tab === 'candidate' ? ' active' : '')} onClick={() => setTab('candidate')}>Add candidate</button>
+        <button className={'tab' + (tab === 'nominee' ? ' active' : '')} onClick={() => setTab('nominee')}>Add nominee</button>
+      </div>
+      {error && <Alert type="error">{error}</Alert>}
+      {message && <Alert type="success">{message}</Alert>}
+      {tab === 'candidate' ? (
+        <>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Full name</th><th>Office contested</th><th>Which one</th></tr></thead>
+              <tbody>{rows.map((row, index) => (
+                <tr key={index}>
+                  <td><input value={row.full_name} onChange={(e) => setRow(index, { full_name: e.target.value })} placeholder="Candidate name" /></td>
+                  <td><select value={row.office} onChange={(e) => setRow(index, { office: e.target.value, scope_value: '' })}>
+                    {CANDIDATE_OFFICES.map((office) => <option key={office}>{office}</option>)}
+                  </select></td>
+                  <td>{candidateScopeType(row.office) === 'state' ? <span className="muted">Whole state</span> : (
+                    <select value={row.scope_value} onChange={(e) => setRow(index, { scope_value: e.target.value })}>
+                      <option value="">Select constituency</option>
+                      {options(row.office).map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  )}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button className="btn sm secondary" onClick={addRow} disabled={busy}>+ Add row</button>
+            <button className="btn" onClick={saveCandidates} disabled={busy}>{busy && <span className="spinner" />} Create candidate accounts</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted">Add Unit Promoters for candidates one at a time or in bulk. Each nominee receives a login automatically.</p>
+          <Link className="btn" to="/register?level=unit_promoter">Open nominee registration</Link>
+        </>
+      )}
+    </Card>
+  );
+}
+
 function NumbersDashboard({ data, me }) {
   const counts = data.platform_counts || {};
   const byLga = data.by_lga || [];
@@ -336,20 +448,7 @@ function CampaignAdminDashboard({ data, me, users = [] }) {
       </div>
 
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
-        <Card title="Add to the platform" note="Quick entry for the next wave of candidates and nominees">
-          <div className="pill-row" style={{ marginBottom: 12 }}>
-            <Link className="pill active" to="/register?level=candidate">Add candidate</Link>
-            <Link className="pill" to="/register?level=unit_promoter">Add nominee</Link>
-          </div>
-          <div className="muted" style={{ marginBottom: 10 }}>
-            Candidates and nominees can be added one by one or in bulk from the member registration page.
-          </div>
-          <div className="btn-row">
-            <Link className="btn" to="/register?level=candidate">Add candidate</Link>
-            <Link className="btn secondary" to="/register?level=unit_promoter">Add nominee</Link>
-          </div>
-        </Card>
-
+        <DgAddPanel />
         <Card title="Coverage snapshot" note="Current network totals and platform scope">
           <Bar label="Candidates" value={counts.candidate || 0} max={Math.max(counts.candidate || 0, 10)} display={num(counts.candidate || 0)} />
           <Bar label="Nominees" value={Math.max(counts.unit_promoter, nominationCoverage)} max={Math.max(Math.max(counts.unit_promoter, nominationCoverage), 10)} display={num(Math.max(counts.unit_promoter, nominationCoverage))} />
@@ -544,7 +643,7 @@ export default function Dashboard() {
   const pendingReview = (submissions.find((s) => s.status === 'pending') || {}).n || 0;
   const verifyRate = pct(totals.verified, totals.total);
 
-  if (normalizeRole(me.user.role) === 'campaign_admin') return <NumbersDashboard data={data} me={me} />;
+  if (normalizeRole(me.user.role) === 'campaign_admin') return <CampaignAdminDashboard data={data} me={me} users={users} />;
   if (isCandidateRole(me.user.role) && me.user.office === 'Governor') return <NumbersDashboard data={data} me={me} />;
   if (isCandidateRole(me.user.role)) return <CandidateDashboard data={data} me={me} />;
   if (FIELD_ROLES.has(normalizeRole(me.user.role))) return <FieldDashboard data={data} me={me} />;

@@ -12,6 +12,7 @@ import MemberDetail from './pages/MemberDetail.jsx';
 import Network from './pages/Network.jsx';
 import Tasks from './pages/Tasks.jsx';
 import FieldWork from './pages/FieldWork.jsx';
+import DgWork from './pages/DgWork.jsx';
 import Payroll from './pages/Payroll.jsx';
 import Users from './pages/Users.jsx';
 import Compliance from './pages/Compliance.jsx';
@@ -56,6 +57,7 @@ function Shell({ children }) {
     if (isField && item.to && !['/', '/tasks', '/profile'].includes(item.to)) return false;
     if (isGovernorCandidate && item.to && item.to !== '/' && item.to !== '/profile') return false;
     if (item.admin && !isAdmin) return false;
+    if (normalizeRole(me.user.role) === 'campaign_admin' && item.to === '/compliance') return false;
     if (item.needs === 'register' && (!canRegister || isCandidate)) return false;
     if (item.needs === 'review' && !canReview) return false;
     if (item.needs === 'compliance' && !canSeeCompliance) return false;
@@ -262,10 +264,12 @@ export default function App() {
           {isCandidate && !isGovernorCandidate && <Route path="/register" element={<Navigate to="/my-nominations" replace />} />}
           {!isField && <Route path="/members/:id" element={<MemberDetail />} />}
           {isField ? <Route path="/tasks" element={<FieldWork />} />
+            : me.permissions.is_admin && normalizeRole(me.user.role) === 'campaign_admin'
+              ? <Route path="/tasks" element={<DgWork />} />
             : !isGovernorCandidate && <Route path="/tasks" element={<Tasks />} />}
           {!isField && !isGovernorCandidate && <Route path="/payroll" element={<Payroll />} />}
           {isAdmin && <Route path="/users" element={<Users />} />}
-          {me.permissions.can_see_compliance
+          {me.permissions.can_see_compliance && normalizeRole(me.user.role) !== 'campaign_admin'
             && <Route path="/compliance" element={<Compliance />} />}
           <Route path="/login" element={<Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
