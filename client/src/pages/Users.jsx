@@ -507,6 +507,117 @@ function PasswordResetRequests() {
   );
 }
 
+function ApiKeysPanel() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [issued, setIssued] = useState(null);
+
+  const load = () => api.get('/admin/api-keys').then((d) => setRows(d.rows)).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    setBusy(true); setError('');
+    try {
+      const res = await api.post('/admin/api-keys', { label: label.trim() || 'Untitled integration' });
+      setIssued(res);
+      setLabel(''); setCreating(false);
+      load();
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const revoke = async (row) => {
+    if (!window.confirm('Revoke "' + row.label + '"? Any integration using this key will stop working immediately.')) return;
+    try { await api.post('/admin/api-keys/' + row.id + '/revoke'); load(); }
+    catch (e) { setError(e.message); }
+  };
+
+  if (!rows) return <Loading label="Loading API keys" />;
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
+      {issued && (
+        <Modal title={'API key created: ' + issued.label} onClose={() => setIssued(null)}>
+          <Alert type="success">
+            Copy this now — it is shown only once and cannot be recovered later.
+          </Alert>
+          <dl className="kv">
+            <dt>Key</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{issued.key}</dd>
+          </dl>
+          <Alert type="info" title="How to use it.">
+            Send it as an <code>X-API-Key</code> header on requests to
+            <code> /api/external/v1/*</code> — see the integration docs for endpoint details.
+          </Alert>
+          <div className="btn-row" style={{ marginTop: 10 }}>
+            <CopyButton label="Copy key" text={issued.key} />
+          </div>
+        </Modal>
+      )}
+      {creating && (
+        <Modal title="Create API key" onClose={() => setCreating(false)} footer={
+          <div className="btn-row">
+            <button className="btn" onClick={create} disabled={busy}>
+              {busy && <span className="spinner" />} Create key
+            </button>
+            <button className="btn secondary" onClick={() => setCreating(false)}>Cancel</button>
+          </div>
+        }>
+          <Field label="Label" hint="What is this key for? e.g. 'Sigar Vote integration'">
+            <input type="text" value={label} onChange={(e) => setLabel(e.target.value)}
+                   placeholder="Sigar Vote integration" autoFocus />
+          </Field>
+        </Modal>
+      )}
+
+      <Card title="External API keys"
+            note="Read-only access to registration, survey and coverage data for outside tools like Sigar Vote"
+            bodyClass="">
+        <div className="toolbar" style={{ marginBottom: rows.length ? 12 : 0 }}>
+          <span className="muted">{num(rows.length)} key{rows.length === 1 ? '' : 's'}</span>
+          <div className="spacer" />
+          <button className="btn sm" onClick={() => setCreating(true)}>+ Create key</button>
+        </div>
+        {rows.length === 0 ? (
+          <Empty title="No API keys yet">
+            Create one to let an outside tool pull registration and survey data through the read-only external API.
+          </Empty>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Label</th><th>Key</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.label}</td>
+                    <td className="mono muted">{r.key_prefix}…</td>
+                    <td className="muted nowrap">{timeAgo(r.created_at)}</td>
+                    <td className="muted nowrap">{r.last_used_at ? timeAgo(r.last_used_at) : 'never'}</td>
+                    <td>
+                      {r.revoked_at
+                        ? <span className="badge">revoked</span>
+                        : <span className="badge green"><span className="dot" />active</span>}
+                    </td>
+                    <td>
+                      {!r.revoked_at && (
+                        <button className="btn sm danger" onClick={() => revoke(r)}>Revoke</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 export default function Users() {
   const { me } = useAuth();
   const [rows, setRows] = useState(null);
@@ -603,6 +714,7 @@ export default function Users() {
       {exporting && <ExportCredentialsModal onClose={() => { setExporting(false); load(); }} />}
 
       <PasswordResetRequests />
+      {!isDg && <ApiKeysPanel />}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total logins" value={num(rows.length)} accent />

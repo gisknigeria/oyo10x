@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { db, nowISO, period as currentPeriod, audit } from './db.js';
 import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
+import { externalRouter, generateApiKey } from './external.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
   requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
@@ -66,6 +67,10 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
+
+// Read-only external intelligence API (API-key auth, not the internal JWT
+// scheme) -- see server/external.js for what it exposes and why.
+app.use('/api/external/v1', externalRouter);
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -1551,6 +1556,37 @@ app.post('/api/users/:id/reset-password', authenticate, requireAdmin, wrap(async
  * Defaults to only accounts that have never logged in, so it does not
  * silently invalidate a password someone has already started using.
  */
+/* ----------------------- external API key management ---------------------- */
+
+app.get('/api/admin/api-keys', authenticate, requireAdmin, wrap(async (req, res) => {
+  const rows = await db.prepare(
+    'SELECT id, label, key_prefix, created_at, last_used_at, revoked_at '
+    + 'FROM api_keys ORDER BY created_at DESC'
+  ).all();
+  res.json({ rows });
+}));
+
+app.post('/api/admin/api-keys', authenticate, requireAdmin, wrap(async (req, res) => {
+  const label = String(req.body?.label || '').trim();
+  if (!label) return res.status(400).json({ error: 'Give this key a label, e.g. "Sigar Vote"' });
+  const { key, prefix, hash } = generateApiKey();
+  await db.prepare(
+    'INSERT INTO api_keys (label, key_hash, key_prefix, created_by, created_at) VALUES (?,?,?,?,?)'
+  ).run(label, hash, prefix, req.user.id, nowISO());
+  await audit(req.user.id, req.user.username, 'api_key_created', null, null, { label }, ip(req));
+  res.status(201).json({ key, label }); // full key returned once, never again
+}));
+
+app.post('/api/admin/api-keys/:id/revoke', authenticate, requireAdmin, wrap(async (req, res) => {
+  const info = await db.prepare(
+    'UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL'
+  ).run(nowISO(), req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'That key is already revoked' });
+  await audit(req.user.id, req.user.username, 'api_key_revoked', null, Number(req.params.id),
+    null, ip(req));
+  res.json({ ok: true });
+}));
+
 app.post('/api/admin/export-credentials', authenticate, requireAdmin, wrap(async (req, res) => {
   const role = req.body?.role || 'all';
   const onlyUnused = req.body?.only_unused !== false;

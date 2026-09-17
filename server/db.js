@@ -71,6 +71,16 @@ export const db = {
 };
 
 await db.exec('PRAGMA foreign_keys = ON');
+// Local SQLite file only -- a remote Turso database is already WAL under the
+// hood and manages its own durability, so this would be a no-op there at
+// best. On a local file, the default journal fsyncs on every single commit;
+// WAL + NORMAL sync lets writers and readers run concurrently and turns
+// every insert from an fsync-per-row cost into a periodic checkpoint cost --
+// this is what took single-row inserts from ~200ms to a few ms at 100k+ rows.
+if (!process.env.TURSO_DATABASE_URL) {
+  await db.exec('PRAGMA journal_mode = WAL');
+  await db.exec('PRAGMA synchronous = NORMAL');
+}
 
 await db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -256,6 +266,22 @@ CREATE TABLE IF NOT EXISTS password_reset_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_reset_requests_user ON password_reset_requests(user_id);
 CREATE INDEX IF NOT EXISTS idx_reset_requests_status ON password_reset_requests(status);
+
+-- Keys for the read-only external intelligence API (e.g. the Sigar Vote
+-- integration). Kept separate from the internal JWT login scheme on purpose
+-- -- this surface hands real people's GPS locations and survey answers to
+-- another system, so it gets its own credential, its own audit trail, and
+-- can be revoked without touching anyone's login.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  label        TEXT NOT NULL,
+  key_hash     TEXT NOT NULL UNIQUE,
+  key_prefix   TEXT NOT NULL,
+  created_by   INTEGER REFERENCES users(id),
+  created_at   TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at   TEXT
+);
 `);
 
 // Additive migrations. Safe to run on every boot: an existing column throws,

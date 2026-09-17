@@ -79,6 +79,15 @@ async function timeIt(label, fn) {
 }
 
 async function main() {
+  // members.upline_user_id is a FK into users(id) -- a scratch DB has no
+  // users yet, so seed one row to satisfy the constraint.
+  const existingUser = await db.prepare('SELECT id FROM users LIMIT 1').get();
+  if (!existingUser) {
+    await db.prepare(
+      'INSERT INTO users (username,password_hash,must_reset,role,full_name,created_at) VALUES (?,?,?,?,?,?)'
+    ).run('bench-seed', 'x', 0, 'mobiliser', 'Bench Seed', nowISO());
+  }
+
   console.log('\n--- Insert throughput ---');
   const insertStart = process.hrtime.bigint();
   let inserted = 0;
@@ -134,21 +143,23 @@ async function main() {
     return r.length + ' rows for ' + lga;
   });
 
-  await timeIt('Deep pagination (OFFSET 50000)', async () => {
+  const deepOffset = Math.min(50000, Math.max(0, Number(total) - 100));
+  await timeIt('Deep pagination (OFFSET ' + deepOffset + ')', async () => {
     const r = await db.prepare(
-      'SELECT id FROM members ORDER BY created_at DESC LIMIT 100 OFFSET 50000'
-    ).all();
+      'SELECT id FROM members ORDER BY created_at DESC LIMIT 100 OFFSET ?'
+    ).all(deepOffset);
     return r.length + ' rows';
   });
 
+  const sampleOffset = Math.floor(Number(total) / 2);
   await timeIt('Duplicate check: exact phone match (indexed)', async () => {
-    const sample = await db.prepare('SELECT phone FROM members LIMIT 1 OFFSET 40000').get();
+    const sample = await db.prepare('SELECT phone FROM members LIMIT 1 OFFSET ?').get(sampleOffset);
     const r = await db.prepare('SELECT id FROM members WHERE phone = ?').all(sample.phone);
     return r.length + ' match(es)';
   });
 
   await timeIt('Duplicate check: exact PVC match (indexed)', async () => {
-    const sample = await db.prepare('SELECT pvc_no FROM members LIMIT 1 OFFSET 40000').get();
+    const sample = await db.prepare('SELECT pvc_no FROM members LIMIT 1 OFFSET ?').get(sampleOffset);
     const r = await db.prepare('SELECT id FROM members WHERE pvc_no = ?').all(sample.pvc_no);
     return r.length + ' match(es)';
   });
