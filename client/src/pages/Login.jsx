@@ -1,6 +1,72 @@
 import React, { useState } from 'react';
 import { Alert, Field } from '../components/ui.jsx';
 import { Crest, CandidatePortrait, GoldRule, CAMPAIGN } from '../components/Brand.jsx';
+import { publicRequest } from '../lib/api.js';
+
+function ForgotPasswordForm({ onBack }) {
+  const [username, setUsername] = useState('');
+  const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const res = await publicRequest('/api/auth/forgot-password', {
+        method: 'POST', body: { username: username.trim(), phone },
+      });
+      setDone(res.message);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <>
+        <h2>Check with the programme office</h2>
+        <Alert type="success">{done}</Alert>
+        <button className="btn secondary" style={{ marginTop: 4 }} onClick={onBack}>
+          Back to sign in
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h2>Forgot password</h2>
+      <div className="sub">
+        Enter your username and the phone number on your account. If they
+        match, the programme office is notified to issue you a new password
+        — there is no automatic email or SMS reset.
+      </div>
+      {error && <Alert type="error">{error}</Alert>}
+      <form onSubmit={submit}>
+        <Field label="Username" required>
+          <input type="text" value={username} autoFocus
+                 onChange={(e) => setUsername(e.target.value)}
+                 placeholder="username here ..." />
+        </Field>
+        <Field label="Phone number" required hint="The number registered on your account">
+          <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)}
+                 placeholder="08031234567" />
+        </Field>
+        <div className="btn-row">
+          <button className="btn" disabled={busy || !username || !phone}>
+            {busy && <span className="spinner" />}
+            {busy ? 'Checking' : 'Request a reset'}
+          </button>
+          <button type="button" className="btn secondary" onClick={onBack}>Cancel</button>
+        </div>
+      </form>
+    </>
+  );
+}
 
 export default function Login({ onSignIn }) {
   const [username, setUsername] = useState('');
@@ -8,6 +74,7 @@ export default function Login({ onSignIn }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -69,42 +136,55 @@ export default function Login({ onSignIn }) {
           </div>
 
           <div className="eyebrow">{CAMPAIGN.party}</div>
-          <h2>Sign in</h2>
-          <div className="sub">
-            Accounts are issued by the programme office. Every entry submitted
-            here is traceable to your login.
-          </div>
 
-          {error && <Alert type="error">{error}</Alert>}
-
-          <form onSubmit={submit}>
-            <Field label="Username" required>
-              <input
-                type="text" value={username} autoFocus autoComplete="username"
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="username here ..."
-              />
-            </Field>
-            <Field label="Password" required>
-              <div className="password-field">
-                <input
-                type={showPassword ? 'text' : 'password'} value={password} autoComplete="current-password"
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="password"
-                />
-                <button type="button" className="password-toggle"
-                        onClick={() => setShowPassword((visible) => !visible)}
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}>
-                  {showPassword ? 'Hide' : 'Show'}
-                </button>
+          {forgot ? (
+            <ForgotPasswordForm onBack={() => setForgot(false)} />
+          ) : (
+            <>
+              <h2>Sign in</h2>
+              <div className="sub">
+                Accounts are issued by the programme office. Every entry submitted
+                here is traceable to your login.
               </div>
-            </Field>
-            <button className="btn" disabled={busy || !username || !password}>
-              {busy && <span className="spinner" />}
-              {busy ? 'Signing in' : 'Sign in'}
-            </button>
-          </form>
 
+              {error && <Alert type="error">{error}</Alert>}
+
+              <form onSubmit={submit}>
+                <Field label="Username" required>
+                  <input
+                    type="text" value={username} autoFocus autoComplete="username"
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="username here ..."
+                  />
+                </Field>
+                <Field label="Password" required>
+                  <div className="password-field">
+                    <input
+                    type={showPassword ? 'text' : 'password'} value={password} autoComplete="current-password"
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="password"
+                    />
+                    <button type="button" className="password-toggle"
+                            onClick={() => setShowPassword((visible) => !visible)}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                      {showPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </Field>
+                <button className="btn" disabled={busy || !username || !password}>
+                  {busy && <span className="spinner" />}
+                  {busy ? 'Signing in' : 'Sign in'}
+                </button>
+              </form>
+
+              <button type="button" className="link-button"
+                      onClick={() => setForgot(true)}
+                      style={{ marginTop: 14, background: 'none', border: 0,
+                               color: 'var(--green-700)', fontSize: 13, cursor: 'pointer', padding: 0 }}>
+                Forgot password?
+              </button>
+            </>
+          )}
         </div>
       </main>
     </div>

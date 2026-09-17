@@ -232,6 +232,26 @@ CREATE TABLE IF NOT EXISTS disparity_reports (
   reviewed_at  TEXT,
   review_note  TEXT
 );
+
+-- Self-service "forgot password". There is no email/SMS provider wired up,
+-- so this cannot deliver a reset link by itself -- what it can safely do is
+-- verify the requester knows the phone number on file and hand the request
+-- to an administrator, who fulfils it the same way every password on this
+-- platform is already issued: generated once, relayed by a human. This
+-- turns "please DM the office" into a real queue admins can see and act on,
+-- without weakening the login below what admin-initiated resets already are.
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  phone_matched INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected
+  requested_ip  TEXT,
+  resolved_by   INTEGER REFERENCES users(id),
+  resolved_at   TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reset_requests_user ON password_reset_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_reset_requests_status ON password_reset_requests(status);
 `);
 
 // Additive migrations. Safe to run on every boot: an existing column throws,

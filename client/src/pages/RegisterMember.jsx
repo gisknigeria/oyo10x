@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api, LEVEL_LABEL, normalizeRole, isUnitPromoterRole } from '../lib/api.js';
-import { Card, Field, Alert, Loading, Status } from '../components/ui.jsx';
+import { Card, Field, Alert, Loading, Status, Modal } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
 const TITLES = ['Mr', 'Mrs', 'Miss', 'Dr', 'Engr', 'Chief', 'Alhaji', 'Alhaja', 'Pastor', 'Imam'];
@@ -73,7 +73,8 @@ function BulkRegisterTable({ geo, lockedLocation }) {
   const copyAllCredentials = () => {
     const lines = (results || []).filter((r) => r.ok).map((r) =>
       r.name + ': ' + r.login.username + ' / ' + r.login.password);
-    navigator.clipboard?.writeText(lines.join('\n'));
+    navigator.clipboard?.writeText(
+      'Login link: ' + window.location.origin + '/login\n' + lines.join('\n'));
   };
 
   return (
@@ -189,8 +190,8 @@ function BulkRegisterTable({ geo, lockedLocation }) {
       )}
 
       <div className="btn-row" style={{ marginTop: 14 }}>
-        <button type="button" className="btn secondary sm" onClick={addRow}>+ Add row</button>
-        <button type="button" className="btn secondary sm" onClick={addTen}>+ Add 10 rows</button>
+        <button type="button" className="btn secondary sm" onClick={addRow} disabled={busy}>+ Add row</button>
+        <button type="button" className="btn secondary sm" onClick={addTen} disabled={busy}>+ Add 10 rows</button>
         <div className="spacer" />
         <button type="button" className="btn secondary" onClick={clearAll} disabled={busy}>
           Clear
@@ -223,8 +224,6 @@ export default function RegisterMember() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(null);
-  const [accountState, setAccountState] = useState('idle');
-  const [accountError, setAccountError] = useState('');
   const [draftLink, setDraftLink] = useState('');
 
   useEffect(() => {
@@ -247,26 +246,6 @@ export default function RegisterMember() {
     const v = e.target.value;
     setForm((f) => (k === 'lga' ? { ...f, lga: v, ward: '' } : { ...f, [k]: v }));
     setConflict(null);
-    if (k === 'bank_name' || k === 'account_number') {
-      setAccountState('idle');
-      setAccountError('');
-    }
-  };
-
-  const resolveAccount = async () => {
-    setAccountState('loading');
-    setAccountError('');
-    try {
-      const result = await api.post('/bank/resolve', {
-        bank_name: form.bank_name,
-        account_number: form.account_number,
-      });
-      setForm((current) => ({ ...current, account_name: result.account_name }));
-      setAccountState('resolved');
-    } catch (err) {
-      setAccountState('error');
-      setAccountError(err.data?.reason || err.data?.error || err.message);
-    }
   };
 
   const createDraftLink = async () => {
@@ -365,6 +344,27 @@ export default function RegisterMember() {
 
   return (
     <>
+      {result?.login && (
+        <Modal title="Member account created" onClose={() => setResult(null)} footer={
+          <div className="btn-row">
+            <button className="btn sm secondary" title="Copy login details"
+              aria-label="Copy login details" onClick={() => navigator.clipboard?.writeText(
+                'OYO 10X login\nLogin link: ' + window.location.origin + '/login\nUsername: '
+                + result.login.username + '\nPassword: ' + result.login.password)}>
+              ⧉ Copy login details
+            </button>
+            <button className="btn secondary" onClick={() => setResult(null)}>Done</button>
+          </div>
+        }>
+          <Alert type="success" title="Share these details now.">
+            <div className="login-credentials">
+              Login link: <code>{window.location.origin + '/login'}</code><br />
+              Username: <code>{result.login.username}</code><br />
+              Temporary password: <code>{result.login.password}</code>
+            </div>
+          </Alert>
+        </Modal>
+      )}
       {modeToggle}
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1fr)', gap: 16 }}>
       <div>
@@ -380,14 +380,6 @@ export default function RegisterMember() {
                 The polling unit and ward are kept so you can add the next person
                 quickly.
               </div>
-              {result.login && (
-                <div className="login-credentials">
-                  <strong>Member login</strong><br />
-                  Username: <code>{result.login.username}</code><br />
-                  Temporary password: <code>{result.login.password}</code><br />
-                  <span className="muted">The member must change this password after signing in.</span>
-                </div>
-              )}
             </div>
           </Alert>
         )}
@@ -513,19 +505,6 @@ export default function RegisterMember() {
               <Field label="Account name"
                      hint="Must match the person's own name">
                 <input type="text" value={form.account_name} onChange={set('account_name')} />
-                <button type="button" className="btn sm secondary"
-                        style={{ marginTop: 7 }}
-                        onClick={resolveAccount}
-                        disabled={accountState === 'loading'
-                          || !form.bank_name || !/^\d{10}$/.test(form.account_number)}>
-                  {accountState === 'loading' ? 'Resolving...' : 'Resolve account name'}
-                </button>
-                {accountState === 'resolved' && (
-                  <div className="hint" style={{ color: 'var(--green-700)' }}>
-                    Name returned by the bank provider.
-                  </div>
-                )}
-                {accountError && <div className="error-text">{accountError}</div>}
               </Field>
             </div>
 

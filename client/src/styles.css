@@ -145,9 +145,10 @@ a:hover { text-decoration: underline; }
 .signout {
   margin-top: 8px; width: 100%; background: rgba(255,255,255,.09); color: #cfe3d8;
   border: 0; padding: 7px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px;
-  font-family: var(--font);
+  font-family: var(--font); display: flex; align-items: center; justify-content: center; gap: 7px;
 }
-.signout:hover { background: rgba(255,255,255,.16); color: #fff; }
+.signout:hover:not(:disabled) { background: rgba(255,255,255,.16); color: #fff; }
+.signout:disabled { opacity: .7; cursor: default; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 

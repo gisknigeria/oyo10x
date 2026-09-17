@@ -6,7 +6,7 @@ export default function PublicRegistration({ token }) {
   const [draft, setDraft] = useState(null);
   const [geo, setGeo] = useState(null);
   const [form, setForm] = useState({});
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(null);
   const [error, setError] = useState('');
   const set = (key) => (e) => setForm((s) => ({ ...s, [key]: e.target.value }));
   useEffect(() => {
@@ -18,8 +18,7 @@ export default function PublicRegistration({ token }) {
     e.preventDefault(); setError('');
     try {
       const result = await publicRequest('/api/public/registration/' + token, { method: 'POST', body: form });
-      setMessage('Registration submitted successfully. Login: ' + result.login.username
-        + ' | Temporary password: ' + result.login.password);
+      setMessage(result.login);
     }
     catch (e2) { setError(e2.data?.flags?.map((f) => f.message).join(', ') || e2.message); }
   };
@@ -27,7 +26,19 @@ export default function PublicRegistration({ token }) {
   if (!draft || !geo) return <Loading label="Loading registration form" />;
   const wards = geo.wards[form.lga] || [];
   const units = geo.polling_units?.[form.lga]?.[form.ward] || [];
-  if (message) return <div className="login-main"><Alert type="success">{message}</Alert></div>;
+  if (message) return <div className="login-main"><Alert type="success" title="Registration submitted successfully.">
+    Login link: <code>{window.location.origin + '/login'}</code><br />
+    Username: <code>{message.username}</code><br />
+    Temporary password: <code>{message.password}</code>
+    <div style={{ marginTop: 10 }}>
+      <button className="btn sm secondary" title="Copy login details" aria-label="Copy login details"
+        onClick={() => navigator.clipboard?.writeText(
+          'OYO 10X login\nLogin link: ' + window.location.origin + '/login\nUsername: '
+          + message.username + '\nPassword: ' + message.password)}>
+        ⧉
+      </button>
+    </div>
+  </Alert></div>;
   return <main className="login-main"><div className="login-box"><div className="eyebrow">OYO 10X registration</div><h2>Complete your registration</h2><div className="sub">Your name and network position were started by a field agent. Complete the remaining details below.</div>{error && <Alert type="error">{error}</Alert>}<form onSubmit={submit}>
     <div className="grid grid-2"><Field label="First name"><input value={form.first_name || ''} onChange={set('first_name')} required /></Field><Field label="Last name"><input value={form.last_name || ''} onChange={set('last_name')} required /></Field></div>
     <Field label="Phone number"><input value={form.phone || ''} onChange={set('phone')} required /></Field>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, naira, num, timeAgo, LEVEL_LABEL } from '../lib/api.js';
-import { Card, Status, Loading, Alert, CheckRow, Empty, Field } from '../components/ui.jsx';
+import { Card, Status, Loading, Alert, CheckRow, Empty, Field, Modal } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
 const CHECK_NAMES = {
@@ -63,6 +63,25 @@ export default function MemberDetail() {
 
   return (
     <>
+      {login && (
+        <Modal title="Member account created" onClose={() => setLogin(null)} footer={
+          <div className="btn-row">
+            <button type="button" className="btn sm secondary" title="Copy login details"
+              aria-label="Copy login details" onClick={() => navigator.clipboard?.writeText(
+                'OYO 10X login\nLogin link: ' + window.location.origin + '/login\nUsername: '
+                + login.username + '\nPassword: ' + login.password)}>
+              ⧉ Copy login details
+            </button>
+            <button type="button" className="btn secondary" onClick={() => setLogin(null)}>Done</button>
+          </div>
+        }>
+          <Alert type="success" title="Share these details now.">
+            Login link: <code>{window.location.origin + '/login'}</code><br />
+            Username: <code>{login.username}</code><br />
+            Temporary password: <code>{login.password}</code>
+          </Alert>
+        </Modal>
+      )}
       <div className="toolbar">
         <button className="btn sm secondary" onClick={() => navigate(-1)}>← Back</button>
         <div className="spacer" />
@@ -83,13 +102,6 @@ export default function MemberDetail() {
             note={m.code + ' · ' + (LEVEL_LABEL[m.level] || m.level)}
             actions={<Status value={m.status} />}
           >
-            {login && (
-              <Alert type="success" title="Login created. ">
-                Username: <code>{login.username}</code><br />
-                Temporary password: <code>{login.password}</code><br />
-                Share these details securely. The member must change the password after signing in.
-              </Alert>
-            )}
             <dl className="kv">
               <dt>Phone</dt><dd className="mono">{m.phone}</dd>
               <dt>Designation</dt><dd>{m.designation || '--'}</dd>

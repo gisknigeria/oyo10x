@@ -92,10 +92,9 @@ function NewUser({ geo, onClose, onSaved }) {
           <dt>Password</dt><dd className="mono">{created.password}</dd>
         </dl>
         <div className="btn-row" style={{ marginTop: 14 }}>
-          <button className="btn" onClick={() => navigator.clipboard?.writeText(
-            'OYO 10X login\nUsername: ' + created.username + '\nPassword: ' + created.password)}>
-            Copy details
-          </button>
+          <CopyButton label="Copy login details"
+            text={'OYO 10X login\nLogin link: ' + window.location.origin + '/login\nUsername: '
+              + created.username + '\nPassword: ' + created.password} />
           <button className="btn secondary" onClick={onClose}>Done</button>
         </div>
       </Modal>
@@ -400,6 +399,113 @@ function ExportCredentialsModal({ onClose }) {
   );
 }
 
+/** A "Copied!" confirmation that reverts after a moment, so clicking Copy
+ * actually tells the admin it worked instead of doing so silently. */
+function CopyButton({ text, label = 'Copy' }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard permission denied -- nothing more we can do */ }
+  };
+  return (
+    <button type="button" className="btn sm secondary" onClick={copy}>
+      {copied ? '✓ Copied' : label}
+    </button>
+  );
+}
+
+function PasswordResetRequests() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState('');
+  const [issued, setIssued] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  const load = () => api.get('/admin/password-reset-requests')
+    .then((d) => setRows(d.rows)).catch((e) => setError(e.message));
+  useEffect(load, []);
+
+  const approve = async (r) => {
+    setBusy(r.id);
+    try {
+      const res = await api.post('/admin/password-reset-requests/' + r.id + '/approve');
+      setIssued({ username: r.username, password: res.password });
+      load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  };
+
+  const reject = async (r) => {
+    setBusy(r.id);
+    try { await api.post('/admin/password-reset-requests/' + r.id + '/reject'); load(); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  };
+
+  // The success modal must survive the list becoming empty (which happens
+  // the instant a request is approved and reloaded) -- so that check comes
+  // first, separate from whether there's anything left to show below it.
+  const modal = issued && (
+    <Modal title={'New password for ' + issued.username} onClose={() => setIssued(null)}>
+      <Alert type="success">Share this with them now — it is shown only once.</Alert>
+      <dl className="kv">
+        <dt>Username</dt><dd className="mono">{issued.username}</dd>
+        <dt>Password</dt><dd className="mono">{issued.password}</dd>
+      </dl>
+      <div className="btn-row" style={{ marginTop: 10 }}>
+        <CopyButton label="Copy password" text={issued.password} />
+            <CopyButton label="Copy login details"
+              text={'Login link: ' + window.location.origin + '/login\nUsername: '
+                + issued.username + '\nPassword: ' + issued.password} />
+      </div>
+    </Modal>
+  );
+
+  if (!rows || rows.length === 0) return modal;
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
+      {modal}
+      <Card title="Password reset requests"
+            note="Requested by the account holder after their phone number matched what is on file"
+            bodyClass="">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Account</th><th>Role</th><th>Requested</th><th></th></tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{r.full_name}</div>
+                    <div className="muted mono" style={{ fontSize: 12 }}>{r.username}</div>
+                  </td>
+                  <td><span className="badge">{ROLE_LABEL[r.role] || r.role}</span></td>
+                  <td className="muted nowrap">{timeAgo(r.created_at)}</td>
+                  <td>
+                    <div className="btn-row">
+                      <button className="btn sm" disabled={busy === r.id} onClick={() => approve(r)}>
+                        {busy === r.id && <span className="spinner" />} Approve
+                      </button>
+                      <button className="btn sm danger" disabled={busy === r.id} onClick={() => reject(r)}>
+                        Reject
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function Users() {
   const [rows, setRows] = useState(null);
   const [geo, setGeo] = useState(null);
@@ -480,12 +586,20 @@ export default function Users() {
             <dt>Username</dt><dd className="mono">{reset.username}</dd>
             <dt>New password</dt><dd className="mono">{reset.password}</dd>
           </dl>
+          <div className="btn-row" style={{ marginTop: 10 }}>
+            <CopyButton label="Copy password" text={reset.password} />
+            <CopyButton label="Copy login details"
+              text={'Login link: ' + window.location.origin + '/login\nUsername: '
+                + reset.username + '\nPassword: ' + reset.password} />
+          </div>
         </Modal>
       )}
       {editing && <EditUser user={editing} geo={geo} onClose={() => setEditing(null)} onSaved={load} />}
       {promoting && <CoordinatorModal user={promoting} geo={geo}
         onClose={() => setPromoting(null)} onSaved={load} />}
       {exporting && <ExportCredentialsModal onClose={() => { setExporting(false); load(); }} />}
+
+      <PasswordResetRequests />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total logins" value={num(rows.length)} accent />

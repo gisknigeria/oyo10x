@@ -40,7 +40,7 @@ const NAV = [
 ];
 
 function Shell({ children }) {
-  const { me, signOut } = useAuth();
+  const { me, signOut, loggingOut } = useAuth();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const isAdmin = me.permissions.is_admin;
@@ -99,7 +99,10 @@ function Shell({ children }) {
           <div className="sidebar-role">
             {me.user.office || ROLE_LABEL[normalizeRole(me.user.role)] || me.user.role}
           </div>
-          <button className="signout" onClick={signOut}>Sign out</button>
+          <button className="signout" onClick={signOut} disabled={loggingOut}>
+            {loggingOut && <span className="spinner" />}
+            {loggingOut ? 'Signing out' : 'Sign out'}
+          </button>
         </div>
       </aside>
 
@@ -152,7 +155,10 @@ function Shell({ children }) {
               {item.to === '/register' && isCandidate ? 'Add nominee' : item.label}
             </NavLink>
           ))}
-          <button className="signout mobile-signout" onClick={signOut}>Sign out</button>
+          <button className="signout mobile-signout" onClick={signOut} disabled={loggingOut}>
+            {loggingOut && <span className="spinner" />}
+            {loggingOut ? 'Signing out' : 'Sign out'}
+          </button>
         </nav>
 
         <div className="content">{children}</div>
@@ -164,20 +170,49 @@ function Shell({ children }) {
 export default function App() {
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false);
   const navigate = useNavigate();
 
   const load = async () => {
-    if (!getToken()) { setLoading(false); return; }
+    if (!getToken()) { setMe(null); setLoading(false); return; }
     try {
       setMe(await api.get('/me'));
     } catch {
+      // Invalid or expired token -- without clearing `me` here, a stale
+      // authenticated value stays in state even though the account is no
+      // longer signed in, which is exactly what let a bfcache-restored page
+      // keep rendering as authenticated.
       clearToken();
+      setMe(null);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => { load(); }, []);
+
+  // Back/forward can restore an earlier page from the browser's bfcache --
+  // the full JS state exactly as it was at that point in history, with no
+  // remount and no effects re-running. If that earlier snapshot was taken
+  // while signed in and the user has since signed out, this is what would
+  // otherwise show a fully authenticated page for an account that is no
+  // longer signed in. `pageshow` with `event.persisted` is the one reliable
+  // signal a page was served from that cache rather than freshly loaded, so
+  // re-validate against the current token whenever it fires.
+  useEffect(() => {
+    const onPageShow = (event) => {
+      if (!event.persisted) return;
+      // Show the loading screen immediately rather than the stale cached
+      // page for the instant it takes load() to resolve -- otherwise an
+      // already-signed-out user would still briefly see the old authenticated
+      // view rendered from the cached state, even though it corrects itself
+      // a moment later.
+      setLoading(true);
+      load();
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
 
   const signIn = async (username, password) => {
     const res = await api.post('/auth/login', { username, password });
@@ -186,9 +221,16 @@ export default function App() {
     navigate('/');
   };
 
-  const signOut = () => {
+  const signOut = async () => {
+    setLoggingOut(true);
+    try {
+      // Best-effort -- record the logout in the audit trail, but don't let a
+      // slow or failing request keep someone signed in against their will.
+      await api.post('/auth/logout', {});
+    } catch { /* sign them out locally regardless */ }
     clearToken();
     setMe(null);
+    setLoggingOut(false);
     navigate('/login');
   };
 
@@ -209,7 +251,7 @@ export default function App() {
   const isField = ['unit_promoter', 'mobiliser', 'grassroot'].includes(normalizeRole(me.user.role));
 
   return (
-    <AuthContext.Provider value={{ me, signOut, reload: load }}>
+    <AuthContext.Provider value={{ me, signOut, loggingOut, reload: load }}>
       <Shell>
         <Routes>
           <Route path="/" element={<Dashboard />} />

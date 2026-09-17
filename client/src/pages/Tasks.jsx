@@ -31,14 +31,17 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   const [location, setLocation] = useState({ lat: null, lng: null, accuracy: null });
 
   useEffect(() => {
-    if (!task.requires_location || !navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setError('This browser does not support location. GPS is required to submit tasks.');
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
       (pos) => setLocation({
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
       }),
-      () => setError('Location access was blocked. Please allow location access or the task cannot be submitted.')
+      () => setError('Location access was blocked. Please allow location access before submitting this task.')
     );
   }, [task]);
 
@@ -49,6 +52,11 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   const submit = async () => {
     setBusy(true); setError('');
     try {
+      if (location.lat == null || location.lng == null) {
+        setError('GPS location is required before submitting this task.');
+        setBusy(false);
+        return;
+      }
       const form = new FormData();
       if (me?.user?.member_id) form.append('member_id', String(me.user.member_id));
       form.append('answers', JSON.stringify(answers));
@@ -101,15 +109,13 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
         </Field>
       ))}
 
-      {task.requires_location && (
-        <div className="card" style={{ padding: 10, marginBottom: 12 }}>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {location.lat != null && location.lng != null
-              ? `Location captured: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
-              : 'Capturing your current location...'}
-          </div>
+      <div className="card" style={{ padding: 10, marginBottom: 12 }}>
+        <div className="muted" style={{ fontSize: 12 }}>
+          {location.lat != null && location.lng != null
+            ? `Location captured: ${location.lat.toFixed(5)}, ${location.lng.toFixed(5)}`
+            : 'Capturing your current location... GPS is required to submit.'}
         </div>
-      )}
+      </div>
 
       <Field label="Notes">
         <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Optional note for the reviewer" />
@@ -125,7 +131,7 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
     type: task.type || 'canvass',
     points: task.points || 5,
     mandatory: task.mandatory !== false,
-    requires_location: task.requires_location !== false,
+    requires_location: true,
     target_level: task.target_level || 'all',
     target_scope_type: task.target_scope_type || 'state',
     target_scope_value: task.target_scope_value || '',
@@ -228,9 +234,8 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
         <span>Mandatory — payment is withheld until this is approved</span>
       </label>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <input type="checkbox" checked={t.requires_location} onChange={set('requires_location')}
-               style={{ width: 'auto' }} />
-        <span>GPS location required</span>
+         <input type="checkbox" checked disabled style={{ width: 'auto' }} />
+         <span>GPS location required for every submission</span>
       </label>
 
       <div className="section-title">Survey questions (optional)</div>

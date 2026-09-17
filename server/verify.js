@@ -434,8 +434,6 @@ export async function runChecks(m, opts = {}) {
       : { status: 'fail', reason: 'Capture location falls outside Oyo State' };
   if (checks.location.status === 'fail') {
     flags.push({ code: 'geo_outside', weight: 35, message: 'Registered from outside Oyo State' });
-  } else if (checks.location.status === 'missing') {
-    flags.push({ code: 'geo_missing', weight: 10, message: 'No GPS captured at registration' });
   }
 
   checks.voter_roll = await checkVoterRoll(m);

@@ -13,6 +13,42 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
+/**
+ * Whether a server-supplied error string looks like an internal/technical
+ * leak (a driver error, a stack trace, a bare exception name) rather than a
+ * message someone deliberately wrote for a user to read. The app's own
+ * hand-authored errors read as plain sentences ("Incorrect username or
+ * password") and never match these patterns -- this is defense in depth
+ * for the rare case something internal slips through unsanitised.
+ */
+function looksTechnical(msg) {
+  if (!msg || typeof msg !== 'string') return true;
+  return /sqlite|libsql|stack trace|\bat \S+\(|TypeError|ReferenceError|SyntaxError|ENOENT|ECONN|undefined is not|cannot read propert|node_modules|\.js:\d+:\d+/i
+    .test(msg);
+}
+
+/** A plain-language fallback keyed by HTTP status, used whenever the server
+ * didn't send a safe, specific message of its own. */
+function fallbackForStatus(status) {
+  if (status === 400) return "That didn't go through. Please check the form and try again.";
+  if (status === 401) return 'You need to sign in again.';
+  if (status === 403) return 'You do not have permission to do that.';
+  if (status === 404) return "That couldn't be found. It may have been moved or removed.";
+  if (status === 409) return 'That conflicts with something already saved — please refresh and try again.';
+  if (status === 413) return 'That file is too large.';
+  if (status === 429) return 'Too many requests — please wait a moment and try again.';
+  if (status >= 500) return 'Something went wrong on our end. Please try again in a moment.';
+  return 'Something went wrong. Please try again.';
+}
+
+/** The message shown to the user for a failed request: the server's own
+ * message when it's a genuine, human-readable one, otherwise a friendly
+ * fallback for the status code. Never exposes raw technical detail. */
+function safeErrorMessage(status, serverMessage) {
+  if (serverMessage && !looksTechnical(serverMessage)) return serverMessage;
+  return fallbackForStatus(status);
+}
+
 async function request(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   const token = getToken();
@@ -21,12 +57,19 @@ async function request(path, options = {}) {
   const isForm = options.body instanceof FormData;
   if (!isForm && options.body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(API_BASE + '/api' + path, {
-    ...options,
-    headers,
-    body: isForm ? options.body
-        : options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(API_BASE + '/api' + path, {
+      ...options,
+      headers,
+      body: isForm ? options.body
+          : options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    // The request never reached the server at all -- offline, DNS, CORS,
+    // the server is down. Nothing technical to show, just what happened.
+    throw new Error("Can't reach the server right now. Check your connection and try again.");
+  }
 
   if (res.status === 401 && getToken()) {
     clearToken();
@@ -39,7 +82,7 @@ async function request(path, options = {}) {
   try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
 
   if (!res.ok) {
-    const err = new Error(data.error || 'Request failed (' + res.status + ')');
+    const err = new Error(safeErrorMessage(res.status, data.error));
     err.status = res.status;
     err.data = data;
     throw err;
@@ -56,20 +99,29 @@ export const api = {
 };
 
 export async function publicRequest(path, options = {}) {
-  const res = await fetch(API_BASE + path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  });
+  let res;
+  try {
+    res = await fetch(API_BASE + path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch {
+    throw new Error("Can't reach the server right now. Check your connection and try again.");
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) { const err = new Error(data.error || 'Request failed'); err.data = data; err.status = res.status; throw err; }
+  if (!res.ok) {
+    const err = new Error(safeErrorMessage(res.status, data.error));
+    err.data = data; err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
 async function triggerCsvDownload(res, filename) {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'Export failed');
+    throw new Error(safeErrorMessage(res.status, data.error));
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

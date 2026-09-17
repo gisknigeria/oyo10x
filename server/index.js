@@ -252,6 +252,127 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   res.json({ token: issueToken(user), user });
 }));
 
+// Recorded so the audit trail shows a full session, not just its start --
+// also gives the client something genuine to wait for, rather than a
+// decorative delay, when it shows a loading state on sign-out.
+app.post('/api/auth/logout', authenticate, wrap(async (req, res) => {
+  await audit(req.user.id, req.user.username, 'logout', 'user', req.user.id, null, ip(req));
+  res.json({ ok: true });
+}));
+
+// Tiny in-memory limiter for the one unauthenticated write endpoint below --
+// nothing this cheap existed anywhere else in the app, and an endpoint that
+// lets an anonymous caller test (username, phone) pairs against real
+// accounts needs at least this much friction against being hammered.
+const forgotPasswordAttempts = new Map();
+function tooManyForgotAttempts(key) {
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000;
+  const limit = 6;
+  const entry = forgotPasswordAttempts.get(key);
+  if (!entry || now > entry.resetAt) {
+    forgotPasswordAttempts.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  entry.count++;
+  return entry.count > limit;
+}
+
+/**
+ * Self-service "forgot password". There is no email or SMS provider
+ * configured, so this cannot deliver a reset link on its own -- what it
+ * safely CAN do is confirm the requester knows the phone number already on
+ * file for that account (checked against the login's own phone, or the
+ * phone of the member record it is linked to) and put the request in front
+ * of an administrator. The response is deliberately identical whether or
+ * not anything matched, so this cannot be used to test which usernames
+ * exist.
+ */
+app.post('/api/auth/forgot-password', wrap(async (req, res) => {
+  const username = String(req.body?.username || '').trim();
+  const phone = normalisePhone(req.body?.phone || '');
+  const genericReply = {
+    ok: true,
+    message: 'If those details match an account, the programme office has '
+           + 'been notified and will be in touch with a new password.',
+  };
+
+  if (!username || !phone) {
+    return res.status(400).json({ error: 'Enter your username and the phone number on the account' });
+  }
+  const limiterKey = ip(req) + '|' + username.toLowerCase();
+  if (tooManyForgotAttempts(limiterKey)) {
+    return res.status(429).json({ error: 'Too many attempts. Please wait a while and try again.' });
+  }
+
+  const user = await db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
+    .get(username);
+  if (!user || user.status !== 'active') {
+    await audit(null, username, 'forgot_password_no_match', 'user', null, null, ip(req));
+    return res.json(genericReply);
+  }
+
+  let onFile = normalisePhone(user.phone || '');
+  if (!onFile && user.member_id) {
+    const member = await db.prepare('SELECT phone FROM members WHERE id = ?').get(user.member_id);
+    onFile = normalisePhone(member?.phone || '');
+  }
+  const matched = !!onFile && onFile === phone;
+
+  if (!matched) {
+    await audit(user.id, username, 'forgot_password_no_match', 'user', user.id, null, ip(req));
+    return res.json(genericReply);
+  }
+
+  const existing = await db.prepare(
+    "SELECT id FROM password_reset_requests WHERE user_id = ? AND status = 'pending'"
+  ).get(user.id);
+  if (!existing) {
+    await db.prepare(
+      'INSERT INTO password_reset_requests (user_id, phone_matched, status, requested_ip, created_at) '
+      + "VALUES (?,1,'pending',?,?)"
+    ).run(user.id, ip(req), nowISO());
+  }
+  await audit(user.id, username, 'forgot_password_requested', 'user', user.id, null, ip(req));
+  res.json(genericReply);
+}));
+
+app.get('/api/admin/password-reset-requests', authenticate, requireAdmin, wrap(async (req, res) => {
+  const rows = await db.prepare(
+    'SELECT r.*, u.username, u.full_name, u.role, u.office '
+    + 'FROM password_reset_requests r JOIN users u ON u.id = r.user_id '
+    + "WHERE r.status = 'pending' ORDER BY r.created_at ASC"
+  ).all();
+  res.json({ rows });
+}));
+
+app.post('/api/admin/password-reset-requests/:id/approve', authenticate, requireAdmin, wrap(async (req, res) => {
+  const reqRow = await db.prepare("SELECT * FROM password_reset_requests WHERE id = ? AND status = 'pending'")
+    .get(req.params.id);
+  if (!reqRow) return res.status(404).json({ error: 'That request is no longer pending' });
+
+  const password = tempPassword();
+  await db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')
+    .run(hashPassword(password), reqRow.user_id);
+  await db.prepare(
+    "UPDATE password_reset_requests SET status = 'approved', resolved_by = ?, resolved_at = ? WHERE id = ?"
+  ).run(req.user.id, nowISO(), reqRow.id);
+  await audit(req.user.id, req.user.username, 'password_reset_approved', 'user', reqRow.user_id,
+    null, ip(req));
+  res.json({ password });
+}));
+
+app.post('/api/admin/password-reset-requests/:id/reject', authenticate, requireAdmin, wrap(async (req, res) => {
+  const info = await db.prepare(
+    "UPDATE password_reset_requests SET status = 'rejected', resolved_by = ?, resolved_at = ? "
+    + "WHERE id = ? AND status = 'pending'"
+  ).run(req.user.id, nowISO(), req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'That request is no longer pending' });
+  await audit(req.user.id, req.user.username, 'password_reset_rejected', null,
+    Number(req.params.id), null, ip(req));
+  res.json({ ok: true });
+}));
+
 const isCoordinator = (user) => !!(isUnitPromoterRole(user.role) && Number(user.is_coordinator));
 const canReview = (user) => ADMIN_ROLES.has(normaliseRole(user.role))
   || isCandidateRole(user.role) || isCoordinator(user);
@@ -871,7 +992,7 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
     b.title, b.description || null, b.type || 'canvass',
     Number(b.points) || ACTIVITY_POINTS[b.type] || 5,
     b.mandatory === false ? 0 : 1,
-    0, b.requires_location === false ? 0 : 1, // photo evidence retired -- always 0
+    0, 1, // photo evidence retired; GPS is mandatory for every submission
     b.questions ? JSON.stringify(b.questions) : null,
     b.target_level || 'all', b.target_scope_type || 'state', b.target_scope_value || null,
     b.period || currentPeriod(), b.opens_at || null, b.due_at || null,
@@ -906,7 +1027,7 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
     points: Number(b.points ?? task.points ?? 5) || 0,
     mandatory: b.mandatory === false ? 0 : 1,
     requires_photo: 0, // photo evidence retired -- always 0
-    requires_location: b.requires_location === false ? 0 : 1,
+    requires_location: 1,
     questions: Array.isArray(b.questions)
       ? b.questions
       : (task.questions_json ? JSON.parse(task.questions_json || '[]') : []),
@@ -1005,8 +1126,8 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
 
   const lat = req.body.lat ? Number(req.body.lat) : null;
   const lng = req.body.lng ? Number(req.body.lng) : null;
-  if (task.requires_location && lat == null) {
-    return res.status(400).json({ error: 'This task requires your location' });
+  if (lat == null || lng == null) {
+    return res.status(400).json({ error: 'GPS location is required to submit this task' });
   }
 
   const existing = await db.prepare('SELECT id FROM submissions WHERE task_id = ? AND member_id = ?')
@@ -1773,9 +1894,20 @@ if (fs.existsSync(clientDist)) {
     res.sendFile(path.join(clientDist, 'index.html')));
 }
 
-app.use((err, _req, res, _next) => {
-  console.error('[api]', err);
-  res.status(500).json({ error: err.message || 'Server error' });
+app.use((err, req, res, _next) => {
+  // The real cause (driver errors, stack traces, anything internal) is
+  // never sent to the client -- only logged, tagged with a short reference
+  // so a user can quote it and it's findable in the logs. Whatever page
+  // rendered this becomes whatever the caller wrote as err.message, so an
+  // unsanitised message here would have shown up verbatim on someone's
+  // screen -- that was the "database error" users were seeing.
+  const ref = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  console.error('[api] [ref ' + ref + '] ' + req.method + ' ' + req.originalUrl, err);
+  res.status(500).json({
+    error: 'Something went wrong on our end. Please try again — if it keeps '
+         + 'happening, tell the programme office reference ' + ref + '.',
+    reference: ref,
+  });
 });
 
 /**

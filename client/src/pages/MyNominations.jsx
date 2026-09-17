@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, num, timeAgo } from '../lib/api.js';
-import { Card, Stat, Status, Loading, Empty, Alert, Field } from '../components/ui.jsx';
+import { Card, Stat, Status, Loading, Empty, Alert, Field, Modal } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
 const BLANK = {
@@ -102,6 +102,25 @@ function AddNomineeForm({ geo, onAdded, remaining = 0, quota = 0 }) {
   return (
     <Card title="Add a nominee"
           note="Every nominee gets their own login automatically, shown once below">
+      {result?.login && (
+        <Modal title="Nominee account created" onClose={() => setResult(null)} footer={
+          <div className="btn-row">
+            <button type="button" className="btn sm secondary" title="Copy login details"
+              aria-label="Copy login details" onClick={() => navigator.clipboard?.writeText(
+                'OYO 10X login\nLogin link: ' + window.location.origin + '/login\nUsername: '
+                + result.login.username + '\nPassword: ' + result.login.password)}>
+              ⧉ Copy login details
+            </button>
+            <button type="button" className="btn secondary" onClick={() => setResult(null)}>Done</button>
+          </div>
+        }>
+          <Alert type="success" title="Share these details now.">
+            Login link: <code>{window.location.origin + '/login'}</code><br />
+            Username: <code>{result.login.username}</code><br />
+            Temporary password: <code>{result.login.password}</code>
+          </Alert>
+        </Modal>
+      )}
       <div className="hint" style={{ marginBottom: 12 }}>
         <span className="badge blue">
           {quotaReached ? 'Quota reached' : remaining + ' remaining'}
@@ -118,14 +137,6 @@ function AddNomineeForm({ geo, onAdded, remaining = 0, quota = 0 }) {
           <div style={{ marginTop: 4 }}>
             Reference <strong className="mono">{result.code}</strong> — status{' '}
             <Status value={result.status} />
-            {result.login && (
-              <div className="login-credentials">
-                <strong>Nominee login</strong><br />
-                Username: <code>{result.login.username}</code><br />
-                Temporary password: <code>{result.login.password}</code><br />
-                <span className="muted">Share this with them — it is shown only once.</span>
-              </div>
-            )}
           </div>
         </Alert>
       )}
