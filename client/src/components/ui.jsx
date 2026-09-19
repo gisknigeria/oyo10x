@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 export function Card({ title, note, actions, children, bodyClass = 'card-body' }) {
   return (
@@ -89,6 +89,33 @@ export function Field({ label, required, hint, error, children }) {
       {children}
       {hint && !error && <div className="hint">{hint}</div>}
       {error && <div className="error-text">{error}</div>}
+    </div>
+  );
+}
+
+/** Password box with a Show/Hide toggle. Field workers type these on phones
+ * where a mistyped password is invisible and the only feedback is a failed
+ * login, so every password box in the app uses this rather than a bare input. */
+export function PasswordInput({ value, onChange, autoFocus, autoComplete = 'current-password',
+                                placeholder, name, id }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="password-field">
+      <input
+        type={visible ? 'text' : 'password'}
+        value={value}
+        onChange={onChange}
+        autoFocus={autoFocus}
+        autoComplete={autoComplete}
+        placeholder={placeholder}
+        name={name}
+        id={id}
+      />
+      <button type="button" className="password-toggle"
+              onClick={() => setVisible((shown) => !shown)}
+              aria-label={visible ? 'Hide password' : 'Show password'}>
+        {visible ? 'Hide' : 'Show'}
+      </button>
     </div>
   );
 }

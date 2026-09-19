@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { api, normalizeRole } from '../lib/api.js';
-import { Alert, Card, Field } from '../components/ui.jsx';
+import { Alert, Card, Field, PasswordInput } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
 
 export default function Profile() {
@@ -60,15 +60,15 @@ export default function Profile() {
       <Card title="Change password" note="Use at least 8 characters and keep your password private.">
         <form onSubmit={changePassword}>
           <Field label="Current password" required>
-            <input type="password" value={passwords.current_password}
+            <PasswordInput value={passwords.current_password} autoComplete="current-password"
               onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })} />
           </Field>
-          <Field label="New password" required>
-            <input type="password" value={passwords.new_password}
+          <Field label="New password" required hint="At least 8 characters">
+            <PasswordInput value={passwords.new_password} autoComplete="new-password"
               onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })} />
           </Field>
           <Field label="Confirm new password" required>
-            <input type="password" value={passwords.confirm}
+            <PasswordInput value={passwords.confirm} autoComplete="new-password"
               onChange={(e) => setPasswords({ ...passwords, confirm: e.target.value })} />
           </Field>
           <button className="btn" disabled={busy || !passwords.current_password || !passwords.new_password || !passwords.confirm}>

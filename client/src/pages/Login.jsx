@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Field } from '../components/ui.jsx';
+import { Alert, Field, PasswordInput } from '../components/ui.jsx';
 import { Crest, CandidatePortrait, GoldRule, CAMPAIGN } from '../components/Brand.jsx';
 import { publicRequest } from '../lib/api.js';
 
@@ -71,7 +71,6 @@ function ForgotPasswordForm({ onBack }) {
 export default function Login({ onSignIn }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [forgot, setForgot] = useState(false);
@@ -158,18 +157,11 @@ export default function Login({ onSignIn }) {
                   />
                 </Field>
                 <Field label="Password" required>
-                  <div className="password-field">
-                    <input
-                    type={showPassword ? 'text' : 'password'} value={password} autoComplete="current-password"
+                  <PasswordInput
+                    value={password} autoComplete="current-password"
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="password"
-                    />
-                    <button type="button" className="password-toggle"
-                            onClick={() => setShowPassword((visible) => !visible)}
-                            aria-label={showPassword ? 'Hide password' : 'Show password'}>
-                      {showPassword ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
+                  />
                 </Field>
                 <button className="btn" disabled={busy || !username || !password}>
                   {busy && <span className="spinner" />}

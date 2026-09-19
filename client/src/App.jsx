@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import { api, getToken, clearToken, ROLE_LABEL, isCandidateRole, isUnitPromoterRole, normalizeRole } from './lib/api.js';
-import { Loading, Alert, Field } from './components/ui.jsx';
+import { Loading, Alert, Field, PasswordInput } from './components/ui.jsx';
 import { Crest, CAMPAIGN } from './components/Brand.jsx';
 
 import Login from './pages/Login.jsx';
@@ -72,16 +72,16 @@ function ForcePasswordChange({ onDone, onSignOut, loggingOut }) {
 
           <form onSubmit={submit}>
             <Field label="Password you were given" required>
-              <input type="password" value={current} autoFocus autoComplete="current-password"
-                     onChange={(e) => setCurrent(e.target.value)} />
+              <PasswordInput value={current} autoFocus autoComplete="current-password"
+                             onChange={(e) => setCurrent(e.target.value)} />
             </Field>
             <Field label="New password" required hint="At least 8 characters">
-              <input type="password" value={next} autoComplete="new-password"
-                     onChange={(e) => setNext(e.target.value)} />
+              <PasswordInput value={next} autoComplete="new-password"
+                             onChange={(e) => setNext(e.target.value)} />
             </Field>
             <Field label="Confirm new password" required>
-              <input type="password" value={confirm} autoComplete="new-password"
-                     onChange={(e) => setConfirm(e.target.value)} />
+              <PasswordInput value={confirm} autoComplete="new-password"
+                             onChange={(e) => setConfirm(e.target.value)} />
             </Field>
             <button className="btn" disabled={busy || !current || !next || !confirm}>
               {busy && <span className="spinner" />} Save new password
