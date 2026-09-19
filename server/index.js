@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { db, nowISO, period as currentPeriod, audit } from './db.js';
+import { db, nowISO, period as currentPeriod, audit, initSchema } from './db.js';
 import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
 import { externalRouter, generateApiKey } from './external.js';
@@ -907,7 +907,9 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   // full geographic scope, which can span many people they did not add.
   if (req.query.mine === '1') { where.push('upline_user_id = ?'); params.push(req.user.id); }
   if (req.query.q) {
-    where.push('(first_name LIKE ? OR last_name LIKE ? OR phone LIKE ? OR code LIKE ? OR polling_unit LIKE ?)');
+    // ILIKE, not LIKE: Postgres LIKE is case-sensitive, so searching "ade"
+    // would miss "Adewale". SQLite's LIKE was case-insensitive for free.
+    where.push('(first_name ILIKE ? OR last_name ILIKE ? OR phone ILIKE ? OR code ILIKE ? OR polling_unit ILIKE ?)');
     const like = '%' + req.query.q + '%';
     params.push(like, like, like, like, like);
   }
@@ -1819,28 +1821,27 @@ app.post('/api/admin/reconcile-bank', authenticate, requireAdmin, upload.single(
 
     const source = req.file.originalname || 'bank-file';
     const stamp = nowISO();
-    const find = await db.prepare('SELECT * FROM members WHERE account_number = ?');
-    const save = await db.prepare(
-      'UPDATE members SET bank_verified_name = ?, bank_verified_at = ?, '
-      + 'bank_verified_source = ? WHERE id = ?'
-    );
-
     const result = { rows: rows.length, matched: 0, unmatched: 0, confirmed: 0, mismatched: [] };
     const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
 
-    await db.exec('BEGIN');
-    try {
+    await db.transaction(async (tx) => {
+      const find = tx.prepare('SELECT * FROM members WHERE account_number = ?');
+      const save = tx.prepare(
+        'UPDATE members SET bank_verified_name = ?, bank_verified_at = ?, '
+        + 'bank_verified_source = ? WHERE id = ?'
+      );
+
       for (const r of rows) {
         const acct = String(r[acctKey] || '').replace(/\D/g, '');
         const name = String(r[nameKey] || '').trim();
         if (!acct || !name) continue;
 
-        const members = find.all(acct);
+        const members = await find.all(acct);
         if (!members.length) { result.unmatched++; continue; }
         result.matched++;
 
         for (const m of members) {
-          save.run(name, stamp, source, m.id);
+          await save.run(name, stamp, source, m.id);
           const confirmed = norm(name);
           if (confirmed.includes(norm(m.last_name)) && confirmed.includes(norm(m.first_name))) {
             result.confirmed++;
@@ -1853,11 +1854,7 @@ app.post('/api/admin/reconcile-bank', authenticate, requireAdmin, upload.single(
           }
         }
       }
-      await db.exec('COMMIT');
-    } catch (e) {
-      await db.exec('ROLLBACK');
-      throw e;
-    }
+    });
 
     audit(req.user.id, req.user.username, 'bank_reconciled', null, null,
       { rows: result.rows, matched: result.matched, mismatched: result.mismatched.length },
@@ -2034,6 +2031,16 @@ async function maybeSeed() {
       resolve();
     });
   });
+}
+
+// Connect and bring the schema up to date before accepting any request, so a
+// bad DATABASE_URL fails loudly at boot rather than as a 500 on the first hit.
+try {
+  await initSchema();
+} catch (error) {
+  console.error('Could not reach the database: ' + error.message);
+  console.error('Check the DATABASE_URL environment variable.');
+  process.exit(1);
 }
 
 app.listen(PORT, '0.0.0.0', async () => {

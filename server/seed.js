@@ -10,7 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { db, nowISO, period as currentPeriod } from './db.js';
+import { db, nowISO, period as currentPeriod, initSchema } from './db.js';
 import { hashPassword, tempPassword, referralCode } from './auth.js';
 import { LGAS, WARDS, SENATORIAL, FEDERAL, STATE_CONST, BANKS } from './data/geo.js';
 import { nubanCheckDigit, BANK_CODES } from './verify.js';
@@ -21,12 +21,15 @@ const RESET = process.argv.includes('--reset');
 const DEMO_SEED = process.env.DEMO_SEED === '1';
 const PER = currentPeriod();
 
+await initSchema();
+
 if (RESET) {
-  for (const t of ['points_ledger', 'submissions', 'tasks', 'members', 'users', 'audit_log']) {
-    await db.exec('DELETE FROM ' + t);
-  }
-  await db.exec("DELETE FROM sqlite_sequence WHERE name IN "
-    + "('points_ledger','submissions','tasks','members','users','audit_log')");
+  // TRUNCATE ... RESTART IDENTITY clears the rows and resets the id sequences
+  // in one step; CASCADE lets it run despite the foreign keys between them.
+  await db.exec(
+    'TRUNCATE points_ledger, submissions, tasks, members, users, audit_log '
+    + 'RESTART IDENTITY CASCADE'
+  );
   console.log('Existing data cleared.');
 }
 
@@ -64,17 +67,29 @@ async function createUser(o) {
 
 /* ------------------------------ 1. admin ------------------------------ */
 
+// Never hard-code these. This repo is on GitHub, so a fixed default password
+// would hand superadmin to anyone who reads it once the app is on a public
+// URL. Set ADMIN_PASSWORD/ADMIN2_PASSWORD in the environment, or let the seed
+// generate one and print it once below.
+const adminPassword = process.env.ADMIN_PASSWORD || tempPassword();
+const admin2Password = process.env.ADMIN2_PASSWORD || tempPassword();
+
 const adminId = await createUser({
-  username: 'admin', password: 'oyo10x-admin', must_reset: 0,
+  username: 'admin', password: adminPassword, must_reset: 0,
   role: 'superadmin', full_name: 'Programme Administrator',
   scope_type: 'state',
 });
 await createUser({
-  username: 'admin2', password: 'oyo10x-admin2', must_reset: 0,
+  username: 'admin2', password: admin2Password, must_reset: 0,
   role: 'admin', full_name: 'Deputy Administrator',
   scope_type: 'state',
 });
 console.log('Administrator accounts created.');
+if (!process.env.ADMIN_PASSWORD || !process.env.ADMIN2_PASSWORD) {
+  console.log('  admin  / ' + adminPassword);
+  console.log('  admin2 / ' + admin2Password);
+  console.log('  ^ generated for this seed. Copy them now -- they are not shown again.');
+}
 
 if (!DEMO_SEED) {
   const csvPath = path.join(__dirname, 'data', 'credentials.csv');
@@ -171,7 +186,6 @@ async function makeMember(o) {
 const DEMO_LGAS = ['Ibadan North', 'Ogbomosho North', 'Iseyin'];
 const demoLogins = [];
 
-await db.exec('BEGIN');
 
 for (const lga of DEMO_LGAS) {
   const wards = WARDS[lga];
@@ -200,7 +214,6 @@ for (const lga of DEMO_LGAS) {
   }
 }
 
-await db.exec('COMMIT');
 console.log('Demo network built across ' + DEMO_LGAS.join(', ') + '.');
 
 /* ---------------------------- 4. tasks & work --------------------------- */
@@ -261,7 +274,6 @@ const insertSub = await db.prepare(
 const everyone = await db.prepare("SELECT * FROM members WHERE status = 'verified'").all();
 let subCount = 0;
 
-await db.exec('BEGIN');
 
 for (const m of everyone) {
   const required = mandatoryByLevel(m.level);
@@ -278,7 +290,7 @@ for (const m of everyone) {
       : null;
     const info = await insertSub.run(task.id, m.id, null, answers, null,
       m.lat, m.lng, 15, null, 'approved', task.points, adminId, nowISO(), nowISO());
-    awardTaskPoints({ id: Number(info.lastInsertRowid), member_id: m.id, user_id: null },
+    await awardTaskPoints({ id: Number(info.lastInsertRowid), member_id: m.id, user_id: null },
       task, PER);
     subCount++;
   }
@@ -290,16 +302,15 @@ const pendingPool = await db.prepare(
 ).all();
 const optionalTask = allTasks.find((t) => t.mandatory === 0);
 for (const m of pendingPool) {
-  insertSub.run(optionalTask.id, m.id, null, null, null, m.lat, m.lng, 15,
+  await insertSub.run(optionalTask.id, m.id, null, null, null, m.lat, m.lng, 15,
     'Community meeting held at the ward secretariat.', 'pending', 0, null, null, nowISO());
   subCount++;
 }
 
 for (const m of everyone) {
-  recomputeActivationPoints(m.id, PER);
+  await recomputeActivationPoints(m.id, PER);
 }
 
-await db.exec('COMMIT');
 console.log(TASKS.length + ' tasks created, ' + subCount + ' submissions generated.');
 
 /* ------------------------- 5. credentials export ------------------------ */

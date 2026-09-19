@@ -194,13 +194,15 @@ export async function findClustering(m, uplineUserId, excludeId = null) {
   }
 
   if (uplineUserId) {
-    // created_at is stored as a JS ISO string ("...T...Z"), which does not sort
-    // against SQLite's datetime() format ("... ..."). Compare like for like.
+    // created_at is stored as a JS ISO string, so compare against another ISO
+    // string rather than a SQL timestamp function.
     const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const burst = await db.prepare(
+    // IS DISTINCT FROM, not IS NOT: Postgres only allows IS NOT with
+    // NULL/TRUE/FALSE, and excludeId is normally an id (or null on create).
+    const burst = (await db.prepare(
       'SELECT COUNT(*) n FROM members WHERE upline_user_id = ? '
-      + 'AND created_at > ? AND id IS NOT ?'
-    ).get(uplineUserId, cutoff, excludeId).n;
+      + 'AND created_at > ? AND id IS DISTINCT FROM ?'
+    ).get(uplineUserId, cutoff, excludeId)).n;
     if (burst >= 15) {
       flags.push({ code: 'rapid_entry', weight: 20,
         message: burst + ' registrations from this account in the last 10 minutes' });
@@ -219,18 +221,20 @@ export async function findClustering(m, uplineUserId, excludeId = null) {
 export async function loadVoterRoll(rows, batch = null) {
   const stamp = new Date().toISOString();
   const tag = batch || 'batch-' + stamp.slice(0, 19);
-  const stmt = db.prepare(
+  const sql =
     'INSERT INTO voter_roll (vin,last_name,first_name,lga,ward,polling_unit,loaded_at,batch) '
     + 'VALUES (?,?,?,?,?,?,?,?) '
     + 'ON CONFLICT(vin) DO UPDATE SET last_name=excluded.last_name, '
     + 'first_name=excluded.first_name, lga=excluded.lga, ward=excluded.ward, '
-    + 'polling_unit=excluded.polling_unit, loaded_at=excluded.loaded_at, batch=excluded.batch'
-  );
+    + 'polling_unit=excluded.polling_unit, loaded_at=excluded.loaded_at, batch=excluded.batch';
 
   let loaded = 0;
   let skipped = 0;
-  await db.exec('BEGIN');
-  try {
+  // One transaction on one pooled connection. A bare db.exec('BEGIN') would
+  // not work here: each pooled query can land on a different connection, so
+  // the BEGIN and the inserts would not be part of the same transaction.
+  await db.transaction(async (tx) => {
+    const stmt = tx.prepare(sql);
     for (const r of rows) {
       const vin = upper(r.vin || r.VIN || r.vin_no || r.voter_id);
       if (!vin) { skipped++; continue; }
@@ -243,11 +247,7 @@ export async function loadVoterRoll(rows, batch = null) {
         stamp, tag);
       loaded++;
     }
-    await db.exec('COMMIT');
-  } catch (e) {
-    await db.exec('ROLLBACK');
-    throw e;
-  }
+  });
   return { loaded, skipped };
 }
 
