@@ -7,3 +7,4 @@ server/data/credentials.csv
 server/uploads/*
 !server/uploads/.gitkeep
 .env
+server/data/candidate-credentials.csv
