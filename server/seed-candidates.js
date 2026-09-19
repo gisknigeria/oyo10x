@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { db, nowISO, initSchema } from './db.js';
 import { hashPassword, tempPassword, referralCode } from './auth.js';
 import { CANDIDATES } from './data/candidates.js';
+import { withUsernames } from './candidate-usernames.js';
 import { SENATORIAL, FEDERAL } from './data/geo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,14 +60,9 @@ const roster = process.argv.includes('--test-candidate')
   ? [TEST_CANDIDATE]
   : CANDIDATES;
 
-/** GOV-SHARAFADEEN-01 -- uppercase, no spaces, unique per candidate. */
-function username(candidate, index) {
-  const first = candidate.first_name
-    .toUpperCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')  // strip accents
-    .replace(/[^A-Z]/g, '');
-  return [candidate.prefix, first, String(index).padStart(2, '0')].join('-');
-}
+// Usernames come from the shared module so the printable credential sheet
+// and the accounts actually created can never disagree.
+const withNames = withUsernames(roster);
 
 // A dry run only reports what it would do, so it deliberately needs no
 // database -- useful for reviewing the generated usernames before the
@@ -89,20 +85,9 @@ for (const c of roster) {
 const stateConstCount = roster.filter((c) => c.scope_type === 'state_const').length;
 
 const seen = new Set();
-for (const [i, c] of roster.entries()) {
-  const u = username(c, perPrefixIndex(c, i));
-  if (seen.has(u)) warnings.push('Duplicate username generated: ' + u);
-  seen.add(u);
-}
-
-function perPrefixIndex(candidate, index) {
-  // Number within the candidate's own prefix group, so numbering restarts at
-  // 01 for each of GOV / SEN / FH / SH.
-  let n = 0;
-  for (let i = 0; i <= index; i++) {
-    if (roster[i].prefix === candidate.prefix) n++;
-  }
-  return n;
+for (const c of withNames) {
+  if (seen.has(c.username)) warnings.push('Duplicate username generated: ' + c.username);
+  seen.add(c.username);
 }
 
 if (warnings.length) {
@@ -118,8 +103,8 @@ let created = 0;
 let reset = 0;
 let skipped = 0;
 
-for (const [index, candidate] of roster.entries()) {
-  const user = username(candidate, perPrefixIndex(candidate, index));
+for (const candidate of withNames) {
+  const user = candidate.username;
 
   if (DRY_RUN) {
     issued.push({ ...candidate, username: user, password: '(dry run)' });

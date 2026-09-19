@@ -8,3 +8,4 @@ server/uploads/*
 !server/uploads/.gitkeep
 .env
 server/data/candidate-credentials.csv
+server/data/candidate-logins.html
