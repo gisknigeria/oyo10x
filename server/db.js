@@ -12,20 +12,13 @@ import pg from 'pg';
 
 const { Pool, types } = pg;
 
-// node-pg returns int8/bigint and numeric as strings, to avoid silently losing
-// precision on values larger than a JS number can hold. Every COUNT and SUM in
-// this app is far inside the safe-integer range and the callers do arithmetic
-// on the result directly, so parse them back to numbers rather than making
-// every call site defend against a string.
+
 types.setTypeParser(types.builtins.INT8, (value) => parseInt(value, 10));
 types.setTypeParser(types.builtins.NUMERIC, (value) => parseFloat(value));
 
 const connectionString = process.env.DATABASE_URL;
 
-// Managed Postgres (DigitalOcean, Render, etc.) requires TLS; a local
-// container does not. If the provider's CA certificate is supplied we verify
-// against it properly, otherwise we still encrypt but skip chain validation,
-// which is what these providers' own connection snippets do.
+
 const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(connectionString);
 const ca = process.env.DATABASE_CA_CERT;
 const ssl = isLocal ? false
