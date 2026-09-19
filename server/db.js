@@ -1,95 +1,151 @@
-import { createClient } from '@libsql/client';
-import path from 'node:path';
-import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+// PostgreSQL data layer.
+//
+// The rest of the app talks to the database through the small interface at the
+// bottom of this file -- db.prepare(sql).get/all/run, db.exec, db.transaction.
+// That interface was originally shaped around SQLite, and it is kept exactly
+// as-is here on purpose: it means ~190 query call sites across the server did
+// not have to change when the database moved to Postgres. The translation
+// (positional placeholders, INSERT ... RETURNING id, bigint parsing) happens
+// here, once, instead of being smeared across every route.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = process.env.OYO_DB || path.join(__dirname, 'data', 'oyo10x.db');
+import pg from 'pg';
 
-if (!process.env.TURSO_DATABASE_URL) fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+const { Pool, types } = pg;
 
-const url = process.env.TURSO_DATABASE_URL || `file:${DB_PATH}`;
-const client = createClient({
-  url,
-  authToken: process.env.TURSO_AUTH_TOKEN,
+// node-pg returns int8/bigint and numeric as strings, to avoid silently losing
+// precision on values larger than a JS number can hold. Every COUNT and SUM in
+// this app is far inside the safe-integer range and the callers do arithmetic
+// on the result directly, so parse them back to numbers rather than making
+// every call site defend against a string.
+types.setTypeParser(types.builtins.INT8, (value) => parseInt(value, 10));
+types.setTypeParser(types.builtins.NUMERIC, (value) => parseFloat(value));
+
+const connectionString = process.env.DATABASE_URL;
+
+// Managed Postgres (DigitalOcean, Render, etc.) requires TLS; a local
+// container does not. If the provider's CA certificate is supplied we verify
+// against it properly, otherwise we still encrypt but skip chain validation,
+// which is what these providers' own connection snippets do.
+const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(connectionString);
+const ca = process.env.DATABASE_CA_CERT;
+const ssl = isLocal ? false
+  : ca ? { ca, rejectUnauthorized: true }
+  : { rejectUnauthorized: false };
+
+const pool = new Pool({
+  connectionString,
+  ssl,
+  // The smallest managed Postgres plans cap total connections in the low
+  // twenties, and this app runs as a single web service, so stay well under.
+  max: Number(process.env.PGPOOL_MAX || 10),
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
 });
 
-const execute = (sql, args = []) => client.execute({ sql, args });
-const makeDb = (run) => ({
-  exec: async (sql) => {
-    const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
-    for (const statement of statements) await run(statement);
-  },
-  prepare: (sql) => ({
-    get: async (...args) => {
-      const result = await run(sql, args);
-      return result.rows[0] || undefined;
-    },
-    all: async (...args) => (await run(sql, args)).rows,
-    run: async (...args) => {
-      const result = await run(sql, args);
-      return {
-        changes: Number(result.rowsAffected || 0),
-        lastInsertRowid: result.lastInsertRowid,
-      };
-    },
-  }),
+pool.on('error', (error) => {
+  // An idle pooled connection dropped by the server must not take the process
+  // down; the pool replaces it on the next checkout.
+  console.error('[db] idle client error:', error.message);
 });
-const exec = async (sql) => {
-  const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
-  for (const statement of statements) await execute(statement);
-};
 
-export const db = {
-  exec,
-  prepare: (sql) => ({
-    get: async (...args) => {
-      const result = await execute(sql, args);
-      return result.rows[0] || undefined;
-    },
-    all: async (...args) => (await execute(sql, args)).rows,
-    run: async (...args) => {
-      const result = await execute(sql, args);
-      return {
-        changes: Number(result.rowsAffected || 0),
-        lastInsertRowid: result.lastInsertRowid,
-      };
-    },
-  }),
-  transaction: async (fn) => {
-    const tx = await client.transaction('write');
-    const txDb = makeDb((sql, args = []) => tx.execute({ sql, args }));
-    try {
-      const result = await fn(txDb);
-      await tx.commit();
-      return result;
-    } catch (error) {
-      try { await tx.rollback(); } catch { /* preserve the original error */ }
-      throw error;
-    }
-  },
-};
+/* --------------------------- SQL translation ------------------------------ */
 
-await db.exec('PRAGMA foreign_keys = ON');
-// Local SQLite file only -- a remote Turso database is already WAL under the
-// hood and manages its own durability, so this would be a no-op there at
-// best. On a local file, the default journal fsyncs on every single commit;
-// WAL + NORMAL sync lets writers and readers run concurrently and turns
-// every insert from an fsync-per-row cost into a periodic checkpoint cost --
-// this is what took single-row inserts from ~200ms to a few ms at 100k+ rows.
-if (!process.env.TURSO_DATABASE_URL) {
-  await db.exec('PRAGMA journal_mode = WAL');
-  await db.exec('PRAGMA synchronous = NORMAL');
+// The app writes `?` placeholders (SQLite style); Postgres wants $1, $2...
+// Quoted string literals are skipped so a `?` inside text is left alone.
+const placeholderCache = new Map();
+export function toPositional(sql) {
+  const cached = placeholderCache.get(sql);
+  if (cached) return cached;
+  let out = '';
+  let n = 0;
+  let inString = false;
+  for (const ch of sql) {
+    if (ch === "'") { inString = !inString; out += ch; continue; }
+    if (ch === '?' && !inString) { out += '$' + ++n; continue; }
+    out += ch;
+  }
+  placeholderCache.set(sql, out);
+  return out;
 }
 
-await db.exec(`
+// SQLite's .run() hands back lastInsertRowid for free. Postgres only returns
+// it if asked, so INSERTs get a RETURNING id appended -- but only for tables
+// that actually have an id column (voter_roll is keyed by vin and has none).
+const tablesWithId = new Set();
+const INSERT_TABLE = /^\s*INSERT\s+INTO\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i;
+
+function withReturningId(sql) {
+  if (/\bRETURNING\b/i.test(sql)) return sql;
+  const match = sql.match(INSERT_TABLE);
+  if (!match || !tablesWithId.has(match[1].toLowerCase())) return sql;
+  return sql + ' RETURNING id';
+}
+
+const makeDb = (query) => ({
+  // Multi-statement DDL goes to Postgres in one call. (The old SQLite driver
+  // had to split on ';' by hand, which broke on a semicolon inside a comment.)
+  exec: async (sql) => { await query(sql, [], true); },
+  prepare: (sql) => ({
+    get: async (...args) => (await query(sql, args)).rows[0] || undefined,
+    all: async (...args) => (await query(sql, args)).rows,
+    run: async (...args) => {
+      const result = await query(withReturningId(sql), args);
+      return {
+        changes: result.rowCount || 0,
+        lastInsertRowid: result.rows?.[0]?.id,
+      };
+    },
+  }),
+});
+
+const runOnPool = (sql, args = [], raw = false) =>
+  raw ? pool.query(sql) : pool.query(toPositional(sql), args);
+
+export const db = {
+  ...makeDb(runOnPool),
+  transaction: async (fn) => {
+    const client = await pool.connect();
+    const txDb = makeDb((sql, args = [], raw = false) =>
+      raw ? client.query(sql) : client.query(toPositional(sql), args));
+    try {
+      await client.query('BEGIN');
+      const result = await fn(txDb);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+  pool,
+};
+
+/* -------------------------------- schema ---------------------------------- */
+
+/**
+ * Create/upgrade the schema. Called explicitly by the entry points rather than
+ * on import, so that importing this module (which auth.js does purely for
+ * touchLogin) does not require a live database -- unit tests import it without
+ * one. Creating the Pool above opens no connection; the first query does.
+ */
+export async function initSchema() {
+  if (!connectionString) {
+    throw new Error(
+      'DATABASE_URL is not set. This app needs a PostgreSQL connection string, '
+      + 'e.g. postgres://user:password@host:5432/dbname'
+    );
+  }
+
+  await db.exec(`
 CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  id            SERIAL PRIMARY KEY,
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   must_reset    INTEGER NOT NULL DEFAULT 1,
-  role          TEXT NOT NULL,          -- superadmin|admin|candidate|mobiliser
-  office        TEXT,                   -- Governor|Deputy Governor|Senator|House of Reps|House of Assembly
+  role          TEXT NOT NULL,
+  office        TEXT,
   full_name     TEXT NOT NULL,
   phone         TEXT,
   scope_type    TEXT NOT NULL DEFAULT 'state',
@@ -103,7 +159,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS members (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  id               SERIAL PRIMARY KEY,
   code             TEXT NOT NULL UNIQUE,
   first_name       TEXT NOT NULL,
   last_name        TEXT NOT NULL,
@@ -121,8 +177,8 @@ CREATE TABLE IF NOT EXISTS members (
   level            TEXT NOT NULL DEFAULT 'mobiliser',
   upline_user_id   INTEGER REFERENCES users(id),
   upline_member_id INTEGER REFERENCES members(id),
-  lat REAL, lng REAL, accuracy REAL, captured_at TEXT,
-  status           TEXT NOT NULL DEFAULT 'pending',  -- pending|verified|rejected|duplicate
+  lat DOUBLE PRECISION, lng DOUBLE PRECISION, accuracy DOUBLE PRECISION, captured_at TEXT,
+  status           TEXT NOT NULL DEFAULT 'pending',
   review_note      TEXT,
   reviewed_by      INTEGER REFERENCES users(id),
   reviewed_at      TEXT,
@@ -139,10 +195,10 @@ CREATE INDEX IF NOT EXISTS idx_members_nin ON members(nin);
 CREATE INDEX IF NOT EXISTS idx_members_pvc ON members(pvc_no);
 
 CREATE TABLE IF NOT EXISTS tasks (
-  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  id                 SERIAL PRIMARY KEY,
   title              TEXT NOT NULL,
   description        TEXT,
-  type               TEXT NOT NULL,   -- rally|survey|canvass|meeting|issue_report|service|training
+  type               TEXT NOT NULL,
   points             INTEGER NOT NULL DEFAULT 5,
   mandatory          INTEGER NOT NULL DEFAULT 1,
   requires_photo     INTEGER NOT NULL DEFAULT 0,
@@ -151,7 +207,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   target_level       TEXT NOT NULL DEFAULT 'all',
   target_scope_type  TEXT NOT NULL DEFAULT 'state',
   target_scope_value TEXT,
-  period             TEXT NOT NULL,   -- YYYY-MM
+  period             TEXT NOT NULL,
   opens_at           TEXT,
   due_at             TEXT,
   status             TEXT NOT NULL DEFAULT 'open',
@@ -160,15 +216,15 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE TABLE IF NOT EXISTS submissions (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           SERIAL PRIMARY KEY,
   task_id      INTEGER NOT NULL REFERENCES tasks(id),
   member_id    INTEGER REFERENCES members(id),
   user_id      INTEGER REFERENCES users(id),
   answers_json TEXT,
   photo_path   TEXT,
-  lat REAL, lng REAL, accuracy REAL,
+  lat DOUBLE PRECISION, lng DOUBLE PRECISION, accuracy DOUBLE PRECISION,
   note         TEXT,
-  status       TEXT NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+  status       TEXT NOT NULL DEFAULT 'pending',
   points_awarded INTEGER NOT NULL DEFAULT 0,
   review_note  TEXT,
   reviewed_by  INTEGER REFERENCES users(id),
@@ -180,10 +236,10 @@ CREATE INDEX IF NOT EXISTS idx_sub_task ON submissions(task_id);
 CREATE INDEX IF NOT EXISTS idx_sub_member ON submissions(member_id);
 
 CREATE TABLE IF NOT EXISTS points_ledger (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         SERIAL PRIMARY KEY,
   member_id  INTEGER REFERENCES members(id),
   user_id    INTEGER REFERENCES users(id),
-  source     TEXT NOT NULL,      -- task|activation|bonus|adjustment
+  source     TEXT NOT NULL,
   source_id  INTEGER,
   points     INTEGER NOT NULL,
   period     TEXT NOT NULL,
@@ -207,7 +263,7 @@ CREATE TABLE IF NOT EXISTS voter_roll (
 CREATE INDEX IF NOT EXISTS idx_roll_pu ON voter_roll(polling_unit);
 
 CREATE TABLE IF NOT EXISTS audit_log (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         SERIAL PRIMARY KEY,
   user_id    INTEGER,
   actor      TEXT,
   action     TEXT NOT NULL,
@@ -219,7 +275,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE TABLE IF NOT EXISTS registration_drafts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   token TEXT NOT NULL UNIQUE,
   creator_user_id INTEGER NOT NULL REFERENCES users(id),
   data_json TEXT NOT NULL,
@@ -229,17 +285,17 @@ CREATE TABLE IF NOT EXISTS registration_drafts (
 );
 
 -- One current disparities/challenges report per candidate, per the Campaign
--- Council directive of 9 Sept 2026 (items i & ii). Upserted on submission --
+-- Council directive of 9 Sept 2026 (items i and ii). Upserted on submission --
 -- updated_at tracks edits, reviewed_* tracks leadership follow-up.
 CREATE TABLE IF NOT EXISTS disparity_reports (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           SERIAL PRIMARY KEY,
   candidate_id INTEGER NOT NULL UNIQUE REFERENCES users(id),
   disparities  TEXT,
   challenges   TEXT,
   positives    TEXT,
-  lat          REAL,
-  lng          REAL,
-  accuracy     REAL,
+  lat          DOUBLE PRECISION,
+  lng          DOUBLE PRECISION,
+  accuracy     DOUBLE PRECISION,
   submitted_at TEXT NOT NULL,
   updated_at   TEXT,
   reviewed_by  INTEGER REFERENCES users(id),
@@ -251,14 +307,12 @@ CREATE TABLE IF NOT EXISTS disparity_reports (
 -- so this cannot deliver a reset link by itself -- what it can safely do is
 -- verify the requester knows the phone number on file and hand the request
 -- to an administrator, who fulfils it the same way every password on this
--- platform is already issued: generated once, relayed by a human. This
--- turns "please DM the office" into a real queue admins can see and act on,
--- without weakening the login below what admin-initiated resets already are.
+-- platform is already issued: generated once, relayed by a human.
 CREATE TABLE IF NOT EXISTS password_reset_requests (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  id            SERIAL PRIMARY KEY,
   user_id       INTEGER NOT NULL REFERENCES users(id),
   phone_matched INTEGER NOT NULL DEFAULT 0,
-  status        TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected
+  status        TEXT NOT NULL DEFAULT 'pending',
   requested_ip  TEXT,
   resolved_by   INTEGER REFERENCES users(id),
   resolved_at   TEXT,
@@ -268,12 +322,12 @@ CREATE INDEX IF NOT EXISTS idx_reset_requests_user ON password_reset_requests(us
 CREATE INDEX IF NOT EXISTS idx_reset_requests_status ON password_reset_requests(status);
 
 -- Keys for the read-only external intelligence API (e.g. the Sigar Vote
--- integration). Kept separate from the internal JWT login scheme on purpose
--- -- this surface hands real people's GPS locations and survey answers to
--- another system, so it gets its own credential, its own audit trail, and
--- can be revoked without touching anyone's login.
+-- integration). Kept separate from the internal login scheme on purpose --
+-- this surface hands real people's GPS locations and survey answers to
+-- another system, so it gets its own credential and can be revoked without
+-- touching anyone's login.
 CREATE TABLE IF NOT EXISTS api_keys (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  id           SERIAL PRIMARY KEY,
   label        TEXT NOT NULL,
   key_hash     TEXT NOT NULL UNIQUE,
   key_prefix   TEXT NOT NULL,
@@ -284,29 +338,40 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 `);
 
-// Additive migrations. Safe to run on every boot: an existing column throws,
-// which we swallow, so upgrading an already-populated database needs no steps.
-for (const [table, column, type] of [
-  ['members', 'bank_verified_name', 'TEXT'],
-  ['members', 'bank_verified_at', 'TEXT'],
-  ['members', 'bank_verified_source', 'TEXT'],
-  // A coordinator is a mobiliser promoted by admin to oversee a ward/LGA
-  // (everyone in that area, not just people they personally added) rather
-  // than a separate registration tier.
-  ['users', 'is_coordinator', 'INTEGER NOT NULL DEFAULT 0'],
-  ['disparity_reports', 'lat', 'REAL'],
-  ['disparity_reports', 'lng', 'REAL'],
-  ['disparity_reports', 'accuracy', 'REAL'],
-  ['disparity_reports', 'positives', 'TEXT'],
-]) {
-  try {
-    await db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type);
-  } catch { /* column already present */ }
+  // Additive migrations. Postgres has IF NOT EXISTS for this, so an existing
+  // column is a no-op rather than an error to swallow.
+  for (const [table, column, type] of [
+    ['members', 'bank_verified_name', 'TEXT'],
+    ['members', 'bank_verified_at', 'TEXT'],
+    ['members', 'bank_verified_source', 'TEXT'],
+    // A coordinator is a mobiliser promoted by admin to oversee a ward/LGA
+    // (everyone in that area, not just people they personally added) rather
+    // than a separate registration tier.
+    ['users', 'is_coordinator', 'INTEGER NOT NULL DEFAULT 0'],
+    ['disparity_reports', 'lat', 'DOUBLE PRECISION'],
+    ['disparity_reports', 'lng', 'DOUBLE PRECISION'],
+    ['disparity_reports', 'accuracy', 'DOUBLE PRECISION'],
+    ['disparity_reports', 'positives', 'TEXT'],
+  ]) {
+    await db.exec('ALTER TABLE ' + table + ' ADD COLUMN IF NOT EXISTS ' + column + ' ' + type);
+  }
+
+  await loadTablesWithId();
+
+  // Office is meaningful only for candidate accounts. Clean up older accounts
+  // created before the role-specific office field was enforced.
+  await db.prepare("UPDATE users SET office = NULL WHERE role <> 'candidate'").run();
 }
 
-// Office is meaningful only for candidate accounts. Clean up older accounts
-// created before the role-specific office field was enforced.
-await db.prepare("UPDATE users SET office = NULL WHERE role <> 'candidate'").run();
+// Which tables carry an id column, so .run() knows where RETURNING id applies.
+// Must be populated before any insert runs.
+async function loadTablesWithId() {
+  const rows = await db.prepare(
+    "SELECT table_name FROM information_schema.columns "
+    + "WHERE table_schema = 'public' AND column_name = 'id'"
+  ).all();
+  for (const row of rows) tablesWithId.add(String(row.table_name).toLowerCase());
+}
 
 export const nowISO = () => new Date().toISOString();
 export const period = (d = new Date()) =>

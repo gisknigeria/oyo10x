@@ -1,19 +1,23 @@
-// Throwaway scale benchmark. Points OYO_DB at a scratch file, inserts a
-// large batch of synthetic member rows the same way real registrations are
-// shaped, then times the actual queries the app runs in production:
-// dashboard aggregates, filtered listings, duplicate-check lookups, search.
+// Throwaway scale benchmark. Inserts a large batch of synthetic member rows
+// the same way real registrations are shaped, then times the actual queries
+// the app runs in production: dashboard aggregates, filtered listings,
+// duplicate-check lookups, search.
 //
-// Run: OYO_DB=<scratch path> TARGET_ROWS=<n> node server/scratch-bench.js
+// Point DATABASE_URL at a SCRATCH database -- this writes junk rows and does
+// not clean them up.
+//
+// Run: DATABASE_URL=postgres://... TARGET_ROWS=<n> node server/scratch-bench.js
 
 import crypto from 'node:crypto';
-import { db, nowISO } from './db.js';
+import { db, nowISO, initSchema } from './db.js';
 import { LGAS, WARDS, POLLING_UNITS, BANKS } from './data/geo.js';
 import { nubanCheckDigit, BANK_CODES } from './verify.js';
 
 const TARGET_ROWS = Number(process.env.TARGET_ROWS || 100000);
 const BATCH_SIZE = 1000;
 
-console.log('Benchmark DB:', process.env.OYO_DB);
+// Host only -- never print the connection string, it carries the password.
+console.log('Benchmark DB:', (process.env.DATABASE_URL || '').replace(/^.*@/, '') || '(unset)');
 console.log('Target rows:', TARGET_ROWS.toLocaleString());
 
 const FIRST = ['Adebayo', 'Folake', 'Oluwaseun', 'Ayodeji', 'Bimpe', 'Tunde', 'Yewande', 'Kunle'];
@@ -79,6 +83,8 @@ async function timeIt(label, fn) {
 }
 
 async function main() {
+  await initSchema();
+
   // members.upline_user_id is a FK into users(id) -- a scratch DB has no
   // users yet, so seed one row to satisfy the constraint.
   const existingUser = await db.prepare('SELECT id FROM users LIMIT 1').get();
