@@ -16,10 +16,30 @@ const { Pool, types } = pg;
 types.setTypeParser(types.builtins.INT8, (value) => parseInt(value, 10));
 types.setTypeParser(types.builtins.NUMERIC, (value) => parseFloat(value));
 
-const connectionString = process.env.DATABASE_URL;
+const rawConnectionString = process.env.DATABASE_URL;
 
+// Managed providers hand out a URL ending in `?sslmode=require`, but recent
+// pg versions treat that as `verify-full` -- full chain verification against
+// the system CA store. DigitalOcean signs with its own CA, which Node does
+// not ship, so the handshake fails with "self-signed certificate in
+// certificate chain" and the sslmode in the URL silently overrides the ssl
+// option below. Strip it and decide TLS in one place, here.
+export function stripSslMode(url) {
+  if (!url) return url;
+  const q = url.indexOf('?');
+  if (q === -1) return url;
+  // Only the query string is touched, never the credentials before it.
+  const params = url.slice(q + 1).split('&').filter((p) => !/^sslmode=/i.test(p));
+  return params.length ? url.slice(0, q) + '?' + params.join('&') : url.slice(0, q);
+}
 
-const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(connectionString);
+const connectionString = stripSslMode(rawConnectionString);
+
+// Connections are always encrypted off-box. With the provider's CA supplied
+// in DATABASE_CA_CERT the chain is verified properly; without it we still
+// encrypt but skip chain validation, which is what the providers' own
+// connection snippets do.
+const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(connectionString || '');
 const ca = process.env.DATABASE_CA_CERT;
 const ssl = isLocal ? false
   : ca ? { ca, rejectUnauthorized: true }

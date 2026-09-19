@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toPositional } from './db.js';
+import { toPositional, stripSslMode } from './db.js';
 
 test('placeholders are numbered in order', () => {
   assert.equal(
@@ -48,6 +48,39 @@ test('repeated calls return the same result (cache is not corrupting)', () => {
   const first = toPositional(sql);
   assert.equal(toPositional(sql), first);
   assert.equal(first, 'SELECT $1 , $2');
+});
+
+/* --------------------------- connection string ---------------------------- */
+// A managed provider's `?sslmode=require` silently overrides the pool's ssl
+// settings in current pg versions and broke the first live deploy, so the
+// stripping is covered here. The credentials must survive untouched.
+
+test('sslmode is removed from a DigitalOcean-style URL', () => {
+  assert.equal(
+    stripSslMode('postgresql://doadmin:pa55@db-x.ondigitalocean.com:25060/defaultdb?sslmode=require'),
+    'postgresql://doadmin:pa55@db-x.ondigitalocean.com:25060/defaultdb'
+  );
+});
+
+test('other query parameters are kept', () => {
+  assert.equal(
+    stripSslMode('postgresql://u:p@host:5432/db?sslmode=require&application_name=oyo10x'),
+    'postgresql://u:p@host:5432/db?application_name=oyo10x'
+  );
+});
+
+test('a password containing ? or & is left untouched', () => {
+  const url = 'postgresql://doadmin:AV%3FNS%26x@host:25060/defaultdb?sslmode=verify-full';
+  assert.equal(stripSslMode(url), 'postgresql://doadmin:AV%3FNS%26x@host:25060/defaultdb');
+});
+
+test('a URL with no query string is unchanged', () => {
+  const url = 'postgresql://u:p@host:5432/db';
+  assert.equal(stripSslMode(url), url);
+});
+
+test('an unset connection string stays unset', () => {
+  assert.equal(stripSslMode(undefined), undefined);
 });
 
 test('the real member-search clause translates correctly', () => {
