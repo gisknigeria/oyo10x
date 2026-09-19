@@ -54,6 +54,17 @@ export function referralCode(prefix = 'OYO') {
   return `${prefix}-${s}`;
 }
 
+// While an account still carries must_reset, these are the only endpoints it
+// can reach: enough to see who you are, set a new password, or sign out.
+// Enforcing it here rather than in the client is the point -- accounts are
+// handed out with a shared starting password, so "please change it" has to be
+// a rule the server keeps, not a screen that can be skipped.
+const RESET_ALLOWED_PATHS = new Set([
+  '/api/me',
+  '/api/auth/change-password',
+  '/api/auth/logout',
+]);
+
 export async function authenticate(req, res, next) {
   const header = req.headers.authorization || '';
   const payload = readToken(header.replace(/^Bearer\s+/i, ''));
@@ -62,6 +73,12 @@ export async function authenticate(req, res, next) {
   if (!user || user.status !== 'active') return res.status(401).json({ error: 'Account inactive' });
   delete user.password_hash;
   req.user = user;
+  if (Number(user.must_reset) === 1 && !RESET_ALLOWED_PATHS.has(req.path)) {
+    return res.status(403).json({
+      error: 'Please choose a new password before continuing.',
+      must_reset: true,
+    });
+  }
   next();
 }
 

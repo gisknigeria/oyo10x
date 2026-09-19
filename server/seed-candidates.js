@@ -1,9 +1,12 @@
 // Creates a login for every candidate on the campaign office's official list.
 //
 //   node server/seed-candidates.js            # create missing accounts
-//   node server/seed-candidates.js --dry-run  # print what it would do, touch nothing
-//   node server/seed-candidates.js --reset-passwords
-//                                             # reissue passwords for existing accounts
+//   --dry-run          print what it would do, touch nothing (needs no database)
+//   --password=X       give everyone the same starting password
+//   --print            also print credentials to stdout (for the App Platform
+//                      console, where the CSV would vanish with the container)
+//   --test-candidate   also create one disposable TEST-DEMO account
+//   --reset-passwords  reissue passwords for accounts that already exist
 //
 // Usernames follow the campaign's format: GOV-/SEN-/FH-/SH- + FIRSTNAME + a
 // unique number, e.g. SEN-YUNUS-01.
@@ -31,6 +34,30 @@ const RESET_PASSWORDS = process.argv.includes('--reset-passwords');
 // passwords to stdout so they can be copied out -- which also means they end
 // up in that terminal's scrollback, so only use it when you must.
 const PRINT = process.argv.includes('--print');
+// --password=Password1234 gives every candidate the same starting password,
+// which makes handing out 50 logins practical. It is only safe because the
+// server refuses every endpoint except "change my password" while must_reset
+// is set, so it cannot survive first use. Omit it to generate a unique
+// password per candidate instead.
+const passwordArg = process.argv.find((a) => a.startsWith('--password='));
+const SHARED_PASSWORD = passwordArg ? passwordArg.slice('--password='.length) : null;
+if (passwordArg && SHARED_PASSWORD.length < 8) {
+  console.error('--password must be at least 8 characters (the app rejects shorter ones).');
+  process.exit(1);
+}
+
+// --test-candidate creates ONE disposable account and nothing else, so the
+// login and forced password change can be rehearsed before 50 real logins
+// exist. It is scoped to a real senatorial district so its dashboard behaves
+// like the genuine ones. Delete it from Platform accounts when finished.
+const TEST_CANDIDATE = {
+  prefix: 'TEST', office: 'Senator', scope_type: 'senatorial',
+  scope_value: 'Oyo Central', designation: 'Test account -- safe to delete',
+  full_name: 'Test Candidate (delete me)', first_name: 'Demo',
+};
+const roster = process.argv.includes('--test-candidate')
+  ? [TEST_CANDIDATE]
+  : CANDIDATES;
 
 /** GOV-SHARAFADEEN-01 -- uppercase, no spaces, unique per candidate. */
 function username(candidate, index) {
@@ -51,7 +78,7 @@ if (!DRY_RUN) await initSchema();
 // A scope_value the app's geography does not recognise means that candidate
 // signs in to an empty dashboard, so say so loudly rather than let it pass.
 const warnings = [];
-for (const c of CANDIDATES) {
+for (const c of roster) {
   if (c.scope_type === 'senatorial' && !SENATORIAL[c.scope_value]) {
     warnings.push('Senatorial district not in geo.js: ' + c.scope_value);
   }
@@ -59,10 +86,10 @@ for (const c of CANDIDATES) {
     warnings.push('Federal constituency not in geo.js: ' + c.scope_value);
   }
 }
-const stateConstCount = CANDIDATES.filter((c) => c.scope_type === 'state_const').length;
+const stateConstCount = roster.filter((c) => c.scope_type === 'state_const').length;
 
 const seen = new Set();
-for (const [i, c] of CANDIDATES.entries()) {
+for (const [i, c] of roster.entries()) {
   const u = username(c, perPrefixIndex(c, i));
   if (seen.has(u)) warnings.push('Duplicate username generated: ' + u);
   seen.add(u);
@@ -73,7 +100,7 @@ function perPrefixIndex(candidate, index) {
   // 01 for each of GOV / SEN / FH / SH.
   let n = 0;
   for (let i = 0; i <= index; i++) {
-    if (CANDIDATES[i].prefix === candidate.prefix) n++;
+    if (roster[i].prefix === candidate.prefix) n++;
   }
   return n;
 }
@@ -91,7 +118,7 @@ let created = 0;
 let reset = 0;
 let skipped = 0;
 
-for (const [index, candidate] of CANDIDATES.entries()) {
+for (const [index, candidate] of roster.entries()) {
   const user = username(candidate, perPrefixIndex(candidate, index));
 
   if (DRY_RUN) {
@@ -107,7 +134,7 @@ for (const [index, candidate] of CANDIDATES.entries()) {
     continue;
   }
 
-  const password = tempPassword();
+  const password = SHARED_PASSWORD || tempPassword();
 
   if (existing) {
     await db.prepare('UPDATE users SET password_hash = ?, must_reset = 1 WHERE id = ?')

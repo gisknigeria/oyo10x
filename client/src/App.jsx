@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import { api, getToken, clearToken, ROLE_LABEL, isCandidateRole, isUnitPromoterRole, normalizeRole } from './lib/api.js';
-import { Loading } from './components/ui.jsx';
+import { Loading, Alert, Field } from './components/ui.jsx';
 import { Crest, CAMPAIGN } from './components/Brand.jsx';
 
 import Login from './pages/Login.jsx';
@@ -21,6 +21,84 @@ import Profile from './pages/Profile.jsx';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
+
+/** Shown in place of the whole app while an account is still on the password
+ * it was issued with. The server enforces this too -- this screen exists so
+ * the person sees what to do instead of a wall of permission errors. */
+function ForcePasswordChange({ onDone, onSignOut, loggingOut }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setError('');
+    if (next !== confirm) { setError('The two new passwords do not match.'); return; }
+    if (next.length < 8) { setError('Your new password must be at least 8 characters.'); return; }
+    if (next === current) { setError('Please choose a different password from the one you were given.'); return; }
+    setBusy(true);
+    try {
+      await api.post('/auth/change-password', { current_password: current, new_password: next });
+      await onDone();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="login-page">
+      <main className="login-main">
+        <div className="login-box">
+          <div className="login-mobile-brand">
+            <Crest size={42} />
+            <div>
+              <div style={{ fontFamily: 'var(--serif)', fontSize: 20, fontWeight: 700,
+                            color: 'var(--green-900)' }}>OYO 10X</div>
+              <div className="eyebrow">{CAMPAIGN.strapline}</div>
+            </div>
+          </div>
+
+          <div className="eyebrow">{CAMPAIGN.party}</div>
+          <h2>Choose your password</h2>
+          <div className="sub">
+            This account is still using the password it was issued with. Set your
+            own before continuing — it keeps your constituency's data private to you.
+          </div>
+
+          {error && <Alert type="error">{error}</Alert>}
+
+          <form onSubmit={submit}>
+            <Field label="Password you were given" required>
+              <input type="password" value={current} autoFocus autoComplete="current-password"
+                     onChange={(e) => setCurrent(e.target.value)} />
+            </Field>
+            <Field label="New password" required hint="At least 8 characters">
+              <input type="password" value={next} autoComplete="new-password"
+                     onChange={(e) => setNext(e.target.value)} />
+            </Field>
+            <Field label="Confirm new password" required>
+              <input type="password" value={confirm} autoComplete="new-password"
+                     onChange={(e) => setConfirm(e.target.value)} />
+            </Field>
+            <button className="btn" disabled={busy || !current || !next || !confirm}>
+              {busy && <span className="spinner" />} Save new password
+            </button>
+          </form>
+
+          <div className="btn-row" style={{ marginTop: 12 }}>
+            <button type="button" className="btn secondary"
+                    onClick={onSignOut} disabled={loggingOut}>
+              {loggingOut && <span className="spinner" />} Sign out
+            </button>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
 
 const NAV = [
   { group: 'Programme' },
@@ -242,6 +320,13 @@ export default function App() {
         <Route path="*" element={<Login onSignIn={signIn} />} />
       </Routes>
     );
+  }
+
+  // Accounts are handed out with a shared starting password, so the server
+  // refuses every other endpoint until it is changed. Show the change form
+  // instead of the app, rather than a dashboard full of permission errors.
+  if (Number(me.user.must_reset) === 1) {
+    return <ForcePasswordChange onDone={load} onSignOut={signOut} loggingOut={loggingOut} />;
   }
 
   const isAdmin = me.permissions.is_admin;
