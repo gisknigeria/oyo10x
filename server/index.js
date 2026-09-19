@@ -11,6 +11,7 @@ import { db, nowISO, period as currentPeriod, audit, initSchema } from './db.js'
 import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
 import { externalRouter, generateApiKey } from './external.js';
+import { makeLimiter } from './rate-limit.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
   requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
@@ -66,18 +67,43 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '2mb' }));
-app.use('/uploads', express.static(UPLOAD_DIR));
+
+app.use((_req, res, next) => {
+  // nosniff is the important one: it stops a browser deciding for itself that
+  // an uploaded file is HTML. The rest are cheap hardening.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
+// Second line of defence behind the extension allowlist above: never render
+// an uploaded file inline, always hand it to the browser as a download.
+// Nothing displays submission photos in the UI today. If that changes, serve
+// the image through an authenticated route rather than dropping this header --
+// these files are public to anyone holding the URL.
+app.use('/uploads', express.static(UPLOAD_DIR, {
+  setHeaders: (res) => res.setHeader('Content-Disposition', 'attachment'),
+}));
 
 // Read-only external intelligence API (API-key auth, not the internal JWT
 // scheme) -- see server/external.js for what it exposes and why.
 app.use('/api/external/v1', externalRouter);
 
+// Uploaded files are served back from this app's own origin, so the
+// extension must never be taken from whatever the uploader called the file.
+// An .html or .svg upload would otherwise be served as markup and could run
+// JavaScript on our origin -- which is where the session token lives.
+const ALLOWED_UPLOAD_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.csv', '.txt']);
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _f, cb) => cb(null, UPLOAD_DIR),
-    filename: (_req, file, cb) =>
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
       cb(null, Date.now() + '-' + Math.random().toString(36).slice(2, 8)
-              + path.extname(file.originalname || '.jpg')),
+              + (ALLOWED_UPLOAD_EXT.has(ext) ? ext : '.bin'));
+    },
   }),
   limits: { fileSize: 8 * 1024 * 1024 },
 });
@@ -249,8 +275,19 @@ app.get('/api/health', async (_req, res) => {
 
 app.post('/api/auth/login', wrap(async (req, res) => {
   const { username, password } = req.body || {};
+  const name = String(username || '').trim();
+
+  // Checked before the password is verified, so a flood of guesses cannot be
+  // used to burn CPU on scrypt either.
+  if (tooManyLoginsForAccount(name.toLowerCase()) || tooManyLoginsFromIp(String(ip(req)))) {
+    await audit(null, name, 'login_rate_limited', 'user', null, null, ip(req));
+    return res.status(429).json({
+      error: 'Too many sign-in attempts. Please wait 15 minutes and try again.',
+    });
+  }
+
   const user = await db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)')
-    .get(String(username || '').trim());
+    .get(name);
   if (user) user.role = normaliseRole(user.role);
 
   if (!user || !verifyPassword(password || '', user.password_hash)) {
@@ -275,23 +312,18 @@ app.post('/api/auth/logout', authenticate, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Tiny in-memory limiter for the one unauthenticated write endpoint below --
-// nothing this cheap existed anywhere else in the app, and an endpoint that
-// lets an anonymous caller test (username, phone) pairs against real
-// accounts needs at least this much friction against being hammered.
-const forgotPasswordAttempts = new Map();
-function tooManyForgotAttempts(key) {
-  const now = Date.now();
-  const windowMs = 60 * 60 * 1000;
-  const limit = 6;
-  const entry = forgotPasswordAttempts.get(key);
-  if (!entry || now > entry.resetAt) {
-    forgotPasswordAttempts.set(key, { count: 1, resetAt: now + windowMs });
-    return false;
-  }
-  entry.count++;
-  return entry.count > limit;
-}
+const tooManyForgotAttempts = makeLimiter(60 * 60 * 1000, 6);
+
+// Login needs this more than anything else here: usernames follow a published
+// pattern (SEN-<FIRSTNAME>-01 and so on) and accounts are handed out with a
+// shared starting password, so an unthrottled login is guessable. Two limits:
+// one per account (stops targeting one candidate) and a looser one per IP
+// (stops sweeping across many accounts from one place).
+// The per-account limit is the one that matters. The per-IP limit is kept
+// deliberately loose because Nigerian mobile networks put many real users
+// behind one address -- a tight IP limit would lock out a whole ward.
+const tooManyLoginsForAccount = makeLimiter(15 * 60 * 1000, 10);
+const tooManyLoginsFromIp = makeLimiter(15 * 60 * 1000, 200);
 
 /**
  * Self-service "forgot password". There is no email or SMS provider
@@ -2033,6 +2065,20 @@ async function maybeSeed() {
   });
 }
 
+// Checked before anything starts listening. The fallback secret is committed
+// to this repo, so running in production without OYO_SECRET would let anyone
+// who can read GitHub mint a valid session token for any account.
+if (!process.env.OYO_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: OYO_SECRET is not set and NODE_ENV=production.');
+    console.error('Every session token would be signed with the public development key.');
+    console.error("Generate one:  node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"");
+    process.exit(1);
+  }
+  console.warn('WARNING: OYO_SECRET is not set. Sessions use the development '
+    + 'default. Set it before exposing this to the internet.');
+}
+
 // Connect and bring the schema up to date before accepting any request, so a
 // bad DATABASE_URL fails loudly at boot rather than as a 500 on the first hit.
 try {
@@ -2048,8 +2094,4 @@ app.listen(PORT, '0.0.0.0', async () => {
   await maybeSeed();
   const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');
-  if (!process.env.OYO_SECRET) {
-    console.warn('WARNING: OYO_SECRET is not set. Sessions use the development '
-      + 'default. Set it before exposing this to the internet.');
-  }
 });
