@@ -339,6 +339,63 @@ CREATE INDEX IF NOT EXISTS idx_reset_requests_status ON password_reset_requests(
 -- this surface hands real people's GPS locations and survey answers to
 -- another system, so it gets its own credential and can be revoked without
 -- touching anyone's login.
+-- Community & Constituency Development projects: what a candidate intends to
+-- do, where, and later what actually happened. A project is a PROMISE by
+-- default -- status only moves to ongoing/completed when someone says so, so
+-- nothing here should be read as work that has started.
+--
+-- sector/scale/project_name come from the campaign's framework document
+-- (data/project-framework.js). project_name may instead be free text when a
+-- candidate picks "Something else", which is why it is not constrained here.
+CREATE TABLE IF NOT EXISTS projects (
+  id             SERIAL PRIMARY KEY,
+  candidate_id   INTEGER NOT NULL REFERENCES users(id),
+  title          TEXT NOT NULL,
+  sector         TEXT NOT NULL,
+  scale          TEXT NOT NULL,              -- small|medium|large
+  project_name   TEXT NOT NULL,              -- from the framework, or custom
+  is_custom      INTEGER NOT NULL DEFAULT 0,
+  lga            TEXT NOT NULL,
+  ward           TEXT NOT NULL,
+  quantity       INTEGER NOT NULL DEFAULT 1,
+  status         TEXT NOT NULL DEFAULT 'promised',
+  need           TEXT,                       -- problem being addressed
+  budget         TEXT,                       -- indicative, free text
+  partner        TEXT,                       -- implementing institution
+  timeline       TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_projects_candidate ON projects(candidate_id);
+CREATE INDEX IF NOT EXISTS idx_projects_geo ON projects(lga, ward);
+CREATE INDEX IF NOT EXISTS idx_projects_sector ON projects(sector, scale);
+
+-- One row per pin dropped on the map. The number of sites is the quantity
+-- when a candidate places them; a project with no sites keeps a plain count
+-- instead, for when the exact spots are not decided yet.
+CREATE TABLE IF NOT EXISTS project_sites (
+  id         SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  lat        DOUBLE PRECISION NOT NULL,
+  lng        DOUBLE PRECISION NOT NULL,
+  label      TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_project_sites_project ON project_sites(project_id);
+
+-- Optional before/after evidence. Optional on purpose: most projects are
+-- promises with nothing yet to photograph.
+CREATE TABLE IF NOT EXISTS project_photos (
+  id         SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  kind       TEXT NOT NULL DEFAULT 'evidence',  -- before|after|evidence
+  caption    TEXT,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_project_photos_project ON project_photos(project_id);
+
 CREATE TABLE IF NOT EXISTS api_keys (
   id           SERIAL PRIMARY KEY,
   label        TEXT NOT NULL,

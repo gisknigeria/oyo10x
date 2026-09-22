@@ -5,7 +5,9 @@
 //   --password=X       give everyone the same starting password
 //   --print            also print credentials to stdout (for the App Platform
 //                      console, where the CSV would vanish with the container)
-//   --test-candidate   also create one disposable TEST-DEMO account
+//   --test-candidate   create one disposable TEST-DEMO account, nothing else
+//   --test-set         create one disposable account per risky profile
+//                      (split LGA, multi-LGA, senate, federal, governor)
 //   --reset-passwords  reissue passwords for accounts that already exist
 //
 // Usernames follow the campaign's format: GOV-/SEN-/FH-/SH- + FIRSTNAME + a
@@ -47,17 +49,63 @@ if (passwordArg && SHARED_PASSWORD.length < 8) {
   process.exit(1);
 }
 
-// --test-candidate creates ONE disposable account and nothing else, so the
-// login and forced password change can be rehearsed before 50 real logins
-// exist. It is scoped to a real senatorial district so its dashboard behaves
-// like the genuine ones. Delete it from Platform accounts when finished.
+// Disposable accounts for rehearsing the real thing. Each one stands in for a
+// candidate profile that exercises a different code path, so a problem shows
+// up here rather than on a real candidate's first login. Delete them from
+// Platform accounts when finished.
+//
+//   --test-candidate  one account, for checking login and the forced password
+//                     change
+//   --test-set        one account per risky profile (see below)
 const TEST_CANDIDATE = {
   prefix: 'TEST', office: 'Senator', scope_type: 'senatorial',
   scope_value: 'Oyo Central', designation: 'Test account -- safe to delete',
   full_name: 'Test Candidate (delete me)', first_name: 'Demo',
 };
-const roster = process.argv.includes('--test-candidate')
-  ? [TEST_CANDIDATE]
+
+const TEST_SET = [
+  // Shares its LGA with another seat. Exercises the ward-level scoping: this
+  // login must see 6 of Akinyele's 12 wards, never the other 6.
+  { prefix: 'TEST', first_name: 'Split', office: 'House of Assembly',
+    scope_type: 'state_const', scope_value: 'Akinyele I',
+    full_name: 'Test Split-LGA Seat (delete me)',
+    designation: 'Akinyele I -- half of one LGA' },
+
+  // The other half. Run both and confirm they never see the same ward.
+  { prefix: 'TEST', first_name: 'Splitb', office: 'House of Assembly',
+    scope_type: 'state_const', scope_value: 'Akinyele II',
+    full_name: 'Test Split-LGA Seat B (delete me)',
+    designation: 'Akinyele II -- the other half' },
+
+  // Two whole LGAs and the largest state seat: the LGA dropdown has two
+  // entries and the ward list spans both.
+  { prefix: 'TEST', first_name: 'Multi', office: 'House of Assembly',
+    scope_type: 'state_const', scope_value: 'Saki/Atisbo',
+    full_name: 'Test Multi-LGA Seat (delete me)',
+    designation: 'Saki/Atisbo -- 2 LGAs, 21 wards' },
+
+  // The senatorial district whose composition was corrected. Should show
+  // Ibadan North and NOT Oluyole.
+  { prefix: 'TEST', first_name: 'Senate', office: 'Senator',
+    scope_type: 'senatorial', scope_value: 'Oyo South',
+    full_name: 'Test Senate Seat (delete me)',
+    designation: 'Oyo South -- 9 LGAs, 99 wards' },
+
+  // Largest federal seat: 42 wards across four LGAs.
+  { prefix: 'TEST', first_name: 'Federal', office: 'House of Representatives',
+    scope_type: 'federal', scope_value: 'Iseyin/Itesiwaju/Kajola/Iwajowa',
+    full_name: 'Test Federal Seat (delete me)',
+    designation: 'Iseyin/Itesiwaju/Kajola/Iwajowa -- 42 wards' },
+
+  // Statewide, and the only candidate whose navigation is restricted.
+  { prefix: 'TEST', first_name: 'Gov', office: 'Governor',
+    scope_type: 'state', scope_value: null,
+    full_name: 'Test Governor (delete me)',
+    designation: 'Statewide -- sees every candidate\'s projects' },
+];
+
+const roster = process.argv.includes('--test-set') ? TEST_SET
+  : process.argv.includes('--test-candidate') ? [TEST_CANDIDATE]
   : CANDIDATES;
 
 // Usernames come from the shared module so the printable credential sheet
@@ -167,8 +215,10 @@ console.log(DRY_RUN ? 'DRY RUN -- nothing was written.' : 'Done.');
 console.log('  created:  ' + created);
 if (reset) console.log('  reissued: ' + reset);
 if (skipped) console.log('  skipped (already exist): ' + skipped);
-console.log('  state assembly candidates: ' + stateConstCount
-  + ' (their constituencies are not yet in geo.js -- see README note)');
+if (stateConstCount) {
+  console.log('  state assembly candidates: ' + stateConstCount
+    + ' (scoped to their own wards, not the whole LGA)');
+}
 
 if (DRY_RUN) {
   console.log('\nUsernames that would be created:\n');

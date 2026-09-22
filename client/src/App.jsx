@@ -16,6 +16,7 @@ import DgWork from './pages/DgWork.jsx';
 import Users from './pages/Users.jsx';
 import Compliance from './pages/Compliance.jsx';
 import MyNominations from './pages/MyNominations.jsx';
+import Projects from './pages/Projects.jsx';
 import PublicRegistration from './pages/PublicRegistration.jsx';
 import Profile from './pages/Profile.jsx';
 
@@ -105,6 +106,7 @@ const NAV = [
   { to: '/', label: 'Dashboard', icon: '▤', end: true },
   { to: '/network', label: 'My 10X network', icon: '⑃', needs: 'network' },
   { to: '/my-nominations', label: 'My nominations', icon: '⚑', needs: 'candidate' },
+  { to: '/projects', label: 'Projects', icon: '◈', needs: 'projects' },
   { to: '/profile', label: 'My profile', icon: '●' },
   { group: 'Field work' },
   { to: '/register', label: 'Register network', icon: '＋', needs: 'register' },
@@ -130,7 +132,11 @@ function Shell({ children }) {
   const visible = NAV.filter((item) => {
     if (isAdmin && item.to && ['/network', '/register'].includes(item.to)) return false;
     if (isField && item.to && !['/', '/tasks', '/profile'].includes(item.to)) return false;
-    if (isGovernorCandidate && item.to && item.to !== '/' && item.to !== '/profile') return false;
+    // The Governor's dashboard is deliberately a statewide overview rather
+    // than a working area -- except for Projects, where they are one of the
+    // people who needs to see every candidate's register.
+    if (isGovernorCandidate && item.to
+        && !['/', '/profile', '/projects'].includes(item.to)) return false;
     if (item.admin && !isAdmin) return false;
     if (normalizeRole(me.user.role) === 'campaign_admin' && item.to === '/compliance') return false;
     if (item.needs === 'register' && (!canRegister || isCandidate)) return false;
@@ -138,6 +144,9 @@ function Shell({ children }) {
     if (item.needs === 'compliance' && !canSeeCompliance) return false;
     if (item.needs === 'network' && isCandidate) return false;
     if (item.needs === 'candidate' && !isCandidate) return false;
+    // Candidates keep their own project register; the Governor, D.G. and
+    // admins see everyone's.
+    if (item.needs === 'projects' && !isCandidate && !canSeeCompliance) return false;
     if (item.to === '/register' && isCandidate) return false;
     return true;
   }).filter((item, index, items) => !item.group || items[index + 1]?.to);
@@ -341,6 +350,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           {!isCandidate && !isField && <Route path="/network" element={<Network />} />}
           {isCandidate && !isGovernorCandidate && <Route path="/my-nominations" element={<MyNominations />} />}
+          {(isCandidate || canSeeCompliance) && <Route path="/projects" element={<Projects />} />}
           <Route path="/profile" element={<Profile />} />
           {!isCandidate && <Route path="/register" element={<RegisterMember />} />}
           {isCandidate && !isGovernorCandidate && <Route path="/register" element={<Navigate to="/my-nominations" replace />} />}

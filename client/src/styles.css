@@ -680,3 +680,19 @@ textarea { min-height: 70px; resize: vertical; }
   font-weight: 600; color: var(--ink-500); border-bottom: 2px solid transparent;
   font-family: var(--font); margin-bottom: -1px; }
 .tab.active { color: var(--green-700); border-bottom-color: var(--green-700); }
+
+/* ---- Projects: scale chooser and map pins ---- */
+.scale-card { display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: 12px 13px; border: 1.5px solid var(--ink-100); border-radius: 12px;
+  background: var(--card); cursor: pointer; transition: border-color .12s, background .12s; }
+.scale-card:hover { border-color: var(--green-700); }
+.scale-card.active { border-color: var(--green-700); background: var(--green-50, #f2f6f3); }
+.scale-card strong { font-size: 14px; color: var(--green-900); }
+.scale-card span { font-size: 11.5px; color: var(--ink-500); line-height: 1.4; }
+
+/* Leaflet's bundled marker images do not survive bundling, so the pin is
+   drawn with CSS instead. */
+.map-pin-dot { display: block; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--green-700); border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.leaflet-container { font: inherit; }

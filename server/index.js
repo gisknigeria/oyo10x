@@ -12,6 +12,11 @@ import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
 import { externalRouter, generateApiKey } from './external.js';
 import { makeLimiter } from './rate-limit.js';
+import { memberScope, scopedLgas, scopedWards } from './scope.js';
+import { storePublicFile, warnIfNotDurable } from './storage.js';
+import {
+  SCALES, SCALE_IDS, SECTORS, FRAMEWORK, PROJECT_STATUSES, STATUS_IDS, isFrameworkProject,
+} from './data/project-framework.js';
 import {
   hashPassword, verifyPassword, issueToken, authenticate,
   requireAdmin, requireRole, tempPassword, referralCode, touchLogin, ADMIN_ROLES,
@@ -19,7 +24,7 @@ import {
 } from './auth.js';
 import {
   LGAS, WARDS, POLLING_UNITS, SENATORIAL, FEDERAL, STATE_CONST, BANKS,
-  TOTAL_WARDS, TOTAL_POLLING_UNITS, lgasForScope,
+  TOTAL_WARDS, TOTAL_POLLING_UNITS,
 } from './data/geo.js';
 import {
   runChecks, normalisePhone, loadVoterRoll, voterRollSize,
@@ -113,52 +118,8 @@ const ip = (req) => req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 const draftToken = () => crypto.randomBytes(24).toString('base64url');
 
 /* ------------------------------ scope rules ------------------------------ */
-
-/**
- * Build a SQL WHERE fragment limiting `members` rows to what this user may see.
- *
- *  - Admin: everyone.
- *  - Plain Mobiliser (not a Coordinator): only the people THEY personally
- *    added -- ownership, not geography. Two Mobilisers can share a polling
- *    unit and must never see each other's registrants.
- *  - Coordinator (a Mobiliser promoted by admin), Candidate, Admin: by
- *    geography -- their assigned ward/LGA/constituency/state.
- */
-function memberScope(user) {
-  if (ADMIN_ROLES.has(normaliseRole(user.role))) return { sql: '1=1', params: [] };
-
-  if ((isUnitPromoterRole(user.role) || isGrassrootRole(user.role)) && !Number(user.is_coordinator)) {
-    return {
-      sql: '(id = ? OR upline_user_id = ? OR upline_member_id = ?)',
-      params: [user.member_id || -1, user.id, user.member_id || -1],
-    };
-  }
-
-  if (user.scope_type === 'state') return { sql: '1=1', params: [] };
-
-  if (['senatorial', 'federal', 'state_const'].includes(user.scope_type)) {
-    const lgas = lgasForScope(user.scope_type, user.scope_value);
-    if (!lgas.length) return { sql: '1=0', params: [] };
-    return { sql: 'lga IN (' + lgas.map(() => '?').join(',') + ')', params: lgas };
-  }
-
-  if (user.scope_type === 'lga') return { sql: 'lga = ?', params: [user.scope_value] };
-  if (user.scope_type === 'ward') return { sql: 'ward = ?', params: [user.scope_value] };
-  if (user.scope_type === 'polling_unit') {
-    const [lga, ward, pollingUnit] = String(user.scope_value || '').split('|');
-    if (!lga || !ward || !pollingUnit) return { sql: '1=0', params: [] };
-    return {
-      sql: 'lga = ? AND ward = ? AND polling_unit = ?',
-      params: [lga, ward, pollingUnit],
-    };
-  }
-
-  // Fallback: own registrations plus own downline branch.
-  return {
-    sql: '(upline_user_id = ? OR upline_member_id = ?)',
-    params: [user.id, user.member_id || -1],
-  };
-}
+// memberScope / scopedLgas / scopedWards live in ./scope.js so they can be
+// unit tested -- importing this file would start a server.
 
 // The network is a single field tier: Mobilisers added by admin/candidate.
 // A Mobiliser promoted to Coordinator
@@ -209,13 +170,6 @@ function resolveMemberForSubmission(user, explicitMemberId) {
   return id > 0 ? id : null;
 }
 
-function scopedLgas(user) {
-  if (ADMIN_ROLES.has(normaliseRole(user.role)) || user.scope_type === 'state') return LGAS;
-  if (user.scope_type === 'polling_unit') {
-    return [String(user.scope_value || '').split('|')[0]].filter(Boolean);
-  }
-  return lgasForScope(user.scope_type, user.scope_value);
-}
 
 // Campaign Council directive, 9 Sept 2026: each candidate nominates a fixed
 // number of Unit Promoters -- not the open-ended "at least 10" growth model
@@ -490,7 +444,7 @@ app.get('/api/geo', authenticate, (req, res) => {
   res.json({
     lgas: allowed,
     all_lgas: LGAS,
-    wards: Object.fromEntries(allowed.map((l) => [l, WARDS[l]])),
+    wards: Object.fromEntries(allowed.map((l) => [l, scopedWards(req.user, l)])),
     polling_units: Object.fromEntries(allowed.map((l) => [l, POLLING_UNITS[l]])),
     senatorial: Object.keys(SENATORIAL),
     federal: Object.keys(FEDERAL),
@@ -925,6 +879,252 @@ app.post('/api/admin/disparity-reports/:id/review', authenticate, wrap(async (re
     Number(req.params.id), { note }, ip(req));
   res.json({ ok: true });
 }));
+
+/* ------------------ community & constituency projects -------------------- */
+
+// Oyo State's bounding box, generously drawn. A pin outside it is a mistake
+// -- a mistyped coordinate or a phone reporting a bogus fix -- not a project.
+const OYO_BOUNDS = { minLat: 6.8, maxLat: 9.4, minLng: 2.5, maxLng: 4.8 };
+
+const PROJECT_PHOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic']);
+
+/** Candidates own projects; oversight sees every one of them. */
+const canSeeAllProjects = (user) => canSeeCompliance(user);
+
+function validateSites(raw) {
+  if (!Array.isArray(raw)) return { sites: [], error: null };
+  const sites = [];
+  for (const s of raw.slice(0, 200)) {
+    const lat = Number(s?.lat);
+    const lng = Number(s?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return { error: 'A map location was missing its coordinates.' };
+    }
+    if (lat < OYO_BOUNDS.minLat || lat > OYO_BOUNDS.maxLat
+        || lng < OYO_BOUNDS.minLng || lng > OYO_BOUNDS.maxLng) {
+      return { error: 'A map location falls outside Oyo State.' };
+    }
+    sites.push({ lat, lng, label: s?.label ? String(s.label).trim().slice(0, 120) : null });
+  }
+  return { sites, error: null };
+}
+
+/**
+ * Roughly where a ward is, so the map can open near it.
+ *
+ * There is no ward boundary data in this app -- polling units are names, not
+ * shapes. What we do have is a GPS fix on every registration, so the average
+ * of those is a decent centre for any ward with people in it. A ward with no
+ * registrations yet returns nothing and the map falls back to a wider view.
+ */
+app.get('/api/geo/ward-centre', authenticate, wrap(async (req, res) => {
+  const lga = String(req.query.lga || '').trim();
+  const ward = String(req.query.ward || '').trim();
+  if (!lga || !ward) return res.status(400).json({ error: 'Give an LGA and a ward' });
+
+  const row = await db.prepare(
+    'SELECT AVG(lat) lat, AVG(lng) lng, COUNT(*) n FROM members '
+    + 'WHERE lga = ? AND ward = ? AND lat IS NOT NULL AND lng IS NOT NULL'
+  ).get(lga, ward);
+
+  if (!row || !row.n || row.lat == null) {
+    return res.json({ lat: null, lng: null, from: 'none', members: 0 });
+  }
+  res.json({ lat: row.lat, lng: row.lng, from: 'registrations', members: Number(row.n) });
+}));
+
+/** The picklists: 20 sectors x 3 scales x 6 projects, plus status options. */
+app.get('/api/project-framework', authenticate, (_req, res) => {
+  res.json({ scales: SCALES, sectors: SECTORS, framework: FRAMEWORK, statuses: PROJECT_STATUSES });
+});
+
+app.get('/api/projects', authenticate, wrap(async (req, res) => {
+  const where = [];
+  const params = [];
+
+  if (canSeeAllProjects(req.user)) {
+    if (req.query.candidate_id) { where.push('p.candidate_id = ?'); params.push(Number(req.query.candidate_id)); }
+  } else {
+    where.push('p.candidate_id = ?');
+    params.push(req.user.id);
+  }
+  for (const [field, column] of [['lga', 'p.lga'], ['ward', 'p.ward'],
+                                 ['sector', 'p.sector'], ['scale', 'p.scale'],
+                                 ['status', 'p.status']]) {
+    if (req.query[field]) { where.push(column + ' = ?'); params.push(req.query[field]); }
+  }
+  const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const rows = await db.prepare(
+    'SELECT p.*, u.full_name candidate_name, u.office, u.scope_value constituency '
+    + 'FROM projects p JOIN users u ON u.id = p.candidate_id '
+    + clause + ' ORDER BY p.created_at DESC LIMIT 1000'
+  ).all(...params);
+
+  // Sites and photos in two queries rather than one per project.
+  const ids = rows.map((r) => r.id);
+  const sites = ids.length ? await db.prepare(
+    'SELECT * FROM project_sites WHERE project_id IN (' + ids.map(() => '?').join(',') + ')'
+  ).all(...ids) : [];
+  const photos = ids.length ? await db.prepare(
+    'SELECT * FROM project_photos WHERE project_id IN (' + ids.map(() => '?').join(',') + ')'
+  ).all(...ids) : [];
+
+  res.json({
+    rows: rows.map((r) => ({
+      ...r,
+      sites: sites.filter((s) => s.project_id === r.id),
+      photos: photos.filter((p) => p.project_id === r.id),
+    })),
+    can_see_all: canSeeAllProjects(req.user),
+  });
+}));
+
+app.post('/api/projects', authenticate, wrap(async (req, res) => {
+  if (!isCandidateRole(req.user.role) && !ADMIN_ROLES.has(normaliseRole(req.user.role))) {
+    return res.status(403).json({ error: 'Only candidates can add projects' });
+  }
+  const b = req.body || {};
+  const title = String(b.title || '').trim();
+  const sector = String(b.sector || '').trim();
+  const scale = String(b.scale || '').trim();
+  const projectName = String(b.project_name || '').trim();
+  const lga = String(b.lga || '').trim();
+  const ward = String(b.ward || '').trim();
+
+  if (!title) return res.status(400).json({ error: 'Give the project a title' });
+  if (!SECTORS.includes(sector)) return res.status(400).json({ error: 'Choose a development sector' });
+  if (!SCALE_IDS.includes(scale)) return res.status(400).json({ error: 'Choose a project scale' });
+  if (!projectName) return res.status(400).json({ error: 'Choose a project type' });
+  if (!lga || !ward) return res.status(400).json({ error: 'Choose an LGA and ward' });
+
+  const status = STATUS_IDS.includes(b.status) ? b.status : 'promised';
+
+  // A candidate may only place projects inside their own constituency --
+  // otherwise anyone could file projects against someone else's ward.
+  if (!ADMIN_ROLES.has(normaliseRole(req.user.role))) {
+    if (!scopedLgas(req.user).includes(lga)
+        || !scopedWards(req.user, lga).includes(ward)) {
+      return res.status(403).json({ error: 'That ward is outside your constituency' });
+    }
+  }
+
+  const { sites, error } = validateSites(b.sites);
+  if (error) return res.status(400).json({ error });
+
+  // Pins are the quantity when they exist; otherwise take the stated number.
+  const quantity = sites.length || Math.max(1, Math.min(9999, Number(b.quantity) || 1));
+
+  const created = await db.transaction(async (tx) => {
+    const info = await tx.prepare(
+      'INSERT INTO projects (candidate_id,title,sector,scale,project_name,is_custom,lga,ward,'
+      + 'quantity,status,need,budget,partner,timeline,created_at) '
+      + 'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+    ).run(req.user.id, title, sector, scale, projectName,
+      isFrameworkProject(sector, scale, projectName) ? 0 : 1,
+      lga, ward, quantity, status,
+      b.need ? String(b.need).trim() : null,
+      b.budget ? String(b.budget).trim() : null,
+      b.partner ? String(b.partner).trim() : null,
+      b.timeline ? String(b.timeline).trim() : null,
+      nowISO());
+    const id = Number(info.lastInsertRowid);
+    for (const s of sites) {
+      await tx.prepare(
+        'INSERT INTO project_sites (project_id,lat,lng,label,created_at) VALUES (?,?,?,?,?)'
+      ).run(id, s.lat, s.lng, s.label, nowISO());
+    }
+    return id;
+  });
+
+  await audit(req.user.id, req.user.username, 'project_created', 'project', created,
+    { title, sector, scale, lga, ward, sites: sites.length }, ip(req));
+  res.status(201).json({ id: created });
+}));
+
+/** Load a project the caller is allowed to touch, or null. */
+async function projectForUser(user, id, { write = false } = {}) {
+  const row = await db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(id));
+  if (!row) return null;
+  if (row.candidate_id === user.id) return row;
+  if (ADMIN_ROLES.has(normaliseRole(user.role))) return row;
+  // Oversight can read everything but must not edit someone's promises.
+  if (!write && canSeeAllProjects(user)) return row;
+  return null;
+}
+
+app.patch('/api/projects/:id', authenticate, wrap(async (req, res) => {
+  const project = await projectForUser(req.user, req.params.id, { write: true });
+  if (!project) return res.status(404).json({ error: 'That project was not found' });
+
+  const b = req.body || {};
+  const fields = [];
+  const params = [];
+  for (const [key, value] of Object.entries({
+    title: b.title, need: b.need, budget: b.budget, partner: b.partner, timeline: b.timeline,
+  })) {
+    if (value !== undefined) { fields.push(key + ' = ?'); params.push(String(value).trim() || null); }
+  }
+  if (b.status !== undefined) {
+    if (!STATUS_IDS.includes(b.status)) return res.status(400).json({ error: 'Unknown status' });
+    fields.push('status = ?'); params.push(b.status);
+  }
+  if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
+
+  fields.push('updated_at = ?'); params.push(nowISO());
+  await db.prepare('UPDATE projects SET ' + fields.join(', ') + ' WHERE id = ?')
+    .run(...params, project.id);
+  await audit(req.user.id, req.user.username, 'project_updated', 'project', project.id,
+    { status: b.status }, ip(req));
+  res.json({ ok: true });
+}));
+
+app.delete('/api/projects/:id', authenticate, wrap(async (req, res) => {
+  const project = await projectForUser(req.user, req.params.id, { write: true });
+  if (!project) return res.status(404).json({ error: 'That project was not found' });
+  await db.prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+  await audit(req.user.id, req.user.username, 'project_deleted', 'project', project.id,
+    { title: project.title }, ip(req));
+  res.json({ ok: true });
+}));
+
+/**
+ * Optional before/after evidence. Most projects are promises with nothing yet
+ * to photograph, so this is never required.
+ */
+app.post('/api/projects/:id/photos', authenticate, upload.single('photo'),
+  wrap(async (req, res) => {
+    const project = await projectForUser(req.user, req.params.id, { write: true });
+    if (!project) return res.status(404).json({ error: 'That project was not found' });
+    if (!req.file) return res.status(400).json({ error: 'Choose a photo to upload' });
+
+    const kind = ['before', 'after', 'evidence'].includes(req.body?.kind)
+      ? req.body.kind : 'evidence';
+
+    let stored;
+    try {
+      stored = await storePublicFile(
+        fs.readFileSync(req.file.path), req.file.originalname,
+        req.file.mimetype || 'image/jpeg',
+        {
+          prefix: 'projects',
+          localDir: path.join(UPLOAD_DIR, 'projects'),
+          publicPath: '/uploads/projects',
+          allowedExt: PROJECT_PHOTO_EXT,
+        });
+    } finally {
+      fs.unlink(req.file.path, () => {});
+    }
+
+    const info = await db.prepare(
+      'INSERT INTO project_photos (project_id,url,kind,caption,uploaded_by,created_at) '
+      + 'VALUES (?,?,?,?,?,?)'
+    ).run(project.id, stored.url, kind,
+      req.body?.caption ? String(req.body.caption).trim().slice(0, 200) : null,
+      req.user.id, nowISO());
+
+    res.status(201).json({ id: Number(info.lastInsertRowid), url: stored.url, durable: stored.durable });
+  }));
 
 app.get('/api/members', authenticate, wrap(async (req, res) => {
   const scope = memberScope(req.user);
@@ -2091,6 +2291,7 @@ try {
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('OYO 10X API listening on port ' + PORT);
+  warnIfNotDurable();
   await maybeSeed();
   const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');

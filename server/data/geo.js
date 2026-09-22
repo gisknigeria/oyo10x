@@ -17,16 +17,27 @@ export const LGAS = [
 ];
 
 // VERIFY against INEC before go-live.
+/**
+ * CORRECTED 2026-09-22 against the campaign office's ward master workbook.
+ *
+ * Four LGAs were on the wrong side: Ibadan North and Ibadan North-East were
+ * listed under Oyo Central, and Oluyole and Ona Ara under Oyo South. They are
+ * the other way round. That mis-scoped all three Senate candidates.
+ *
+ * The workbook is self-consistent on this -- its 351 ward rows total 118 /
+ * 134 / 99 per district, matching its own boundary sheet and PLAC/Situation
+ * Room. The previous grouping produced 121 / 134 / 96, and the 3-ward
+ * difference is exactly these four LGAs swapping sides.
+ */
 export const SENATORIAL = {
   'Oyo South': [
-    'Ibadan North-West', 'Ibadan South-East', 'Ibadan South-West',
+    'Ibadan North', 'Ibadan North-East', 'Ibadan North-West',
+    'Ibadan South-East', 'Ibadan South-West',
     'Ibarapa Central', 'Ibarapa East', 'Ibarapa North', 'Ido',
-    'Oluyole', 'Ona Ara',
   ],
   'Oyo Central': [
-    'Afijio', 'Akinyele', 'Atiba', 'Egbeda', 'Ibadan North',
-    'Ibadan North-East', 'Lagelu', 'Ogo Oluwa', 'Oyo East',
-    'Oyo West', 'Surulere',
+    'Afijio', 'Akinyele', 'Atiba', 'Egbeda', 'Lagelu', 'Ogo Oluwa',
+    'Oluyole', 'Ona Ara', 'Oyo East', 'Oyo West', 'Surulere',
   ],
   'Oyo North': [
     'Atisbo', 'Irepo', 'Iseyin', 'Itesiwaju', 'Iwajowa', 'Kajola',
@@ -53,15 +64,63 @@ export const FEDERAL = {
 };
 
 // 32 State Assembly constituencies: one per LGA, with Ogo Oluwa/Surulere paired.
-export const STATE_CONST = (() => {
-  const out = {};
-  for (const lga of LGAS) {
-    if (lga === 'Ogo Oluwa' || lga === 'Surulere') continue;
-    out[`${lga} State Constituency`] = [lga];
-  }
-  out['Ogo Oluwa/Surulere State Constituency'] = ['Ogo Oluwa', 'Surulere'];
-  return out;
-})();
+/**
+ * The 32 Oyo State House of Assembly constituencies, as named on the campaign
+ * office's official candidate list.
+ *
+ * This was previously generated as one constituency per LGA, which was a
+ * convenient fiction: the real boundaries split some LGAs in two (Akinyele I
+ * and II, Ibadan North I and II) and merge others (Irepo/Olorunsogo,
+ * Saki/Atisbo). The generated version produced names no candidate's record
+ * matched, so State Assembly candidates resolved to no LGAs at all and signed
+ * in to an empty dashboard.
+ *
+ * The keys here must stay byte-identical to the scope_value strings in
+ * data/candidates.js -- that is what links a candidate's login to the area
+ * they can see.
+ *
+ * KNOWN LIMITATION: members are stored with an LGA, not a constituency, so
+ * where two constituencies share one LGA they necessarily resolve to the same
+ * members. Two effects follow, both unavoidable without ward-to-constituency
+ * boundaries the campaign has not supplied:
+ *   - Akinyele I and Akinyele II candidates each see all of Akinyele.
+ *   - Rolling member counts up per constituency counts a shared LGA once for
+ *     each constituency, so those totals overlap and must not be summed.
+ */
+export const STATE_CONST = {
+  Afijio: ['Afijio'],
+  'Akinyele I': ['Akinyele'],
+  'Akinyele II': ['Akinyele'],
+  Atiba: ['Atiba'],
+  Egbeda: ['Egbeda'],
+  'Ibadan North East I': ['Ibadan North-East'],
+  'Ibadan North East II': ['Ibadan North-East'],
+  'Ibadan North I': ['Ibadan North'],
+  'Ibadan North II': ['Ibadan North'],
+  'Ibadan North West': ['Ibadan North-West'],
+  'Ibadan South East I': ['Ibadan South-East'],
+  'Ibadan South East II': ['Ibadan South-East'],
+  'Ibadan South West I': ['Ibadan South-West'],
+  'Ibadan South West II': ['Ibadan South-West'],
+  'Ibarapa East': ['Ibarapa East'],
+  'Ibarapa North/Ibarapa Central': ['Ibarapa North', 'Ibarapa Central'],
+  Ido: ['Ido'],
+  'Irepo/Olorunsogo': ['Irepo', 'Olorunsogo'],
+  'Iseyin/Itesiwaju': ['Iseyin', 'Itesiwaju'],
+  Iwajowa: ['Iwajowa'],
+  Kajola: ['Kajola'],
+  Lagelu: ['Lagelu'],
+  'Ogbomoso North': ['Ogbomosho North'],
+  'Ogbomoso South': ['Ogbomosho South'],
+  Oluyole: ['Oluyole'],
+  'Ona-Ara': ['Ona Ara'],
+  Orelope: ['Orelope'],
+  Oriire: ['Ori Ire'],
+  'Oyo East/Oyo West': ['Oyo East', 'Oyo West'],
+  'Saki West': ['Saki West'],
+  'Saki/Atisbo': ['Saki East', 'Atisbo'],
+  'Surulere/Ogo-Oluwa': ['Surulere', 'Ogo Oluwa'],
+};
 
 const normaliseLga = (value) => String(value).toUpperCase().replace(/[^A-Z0-9]/g, '');
 const sourceLga = Object.fromEntries(Object.keys(OYO_POLLING_DATA.lgas)

@@ -163,6 +163,23 @@ Without `?level=`, the response has all six as top-level keys:
 `by_polling_unit`, `by_ward`, `by_lga`, `by_senatorial_district`,
 `by_federal_constituency`, `by_state_constituency`.
 
+### One caveat on `by_state_constituency`
+
+**Do not sum these rows — they overlap.**
+
+Members are recorded against an LGA, not a state constituency. Most of Oyo's
+32 assembly constituencies map to one LGA each, but several split a single
+LGA in two (`Akinyele I` and `Akinyele II`, `Ibadan North I` and
+`Ibadan North II`, and the same for Ibadan North-East, South-East and
+South-West). Where that happens, both constituencies report the whole LGA's
+members, so adding the rows together counts those people twice.
+
+Each row on its own is correct as "members in the LGA(s) this constituency
+covers". For a genuine state total, use `by_lga` or `/summary` instead.
+
+The other five levels do not have this problem — senatorial districts, federal
+constituencies, LGAs, wards and polling units each partition the state cleanly.
+
 ---
 
 ## Pagination
