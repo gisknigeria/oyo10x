@@ -14,8 +14,19 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { db, nowISO } from './db.js';
 import { SENATORIAL, FEDERAL, STATE_CONST } from './data/geo.js';
+import { wardsInStateConstituency } from './data/ward-constituencies.js';
 
 export const externalRouter = express.Router();
+
+// Express 4 does not catch a rejected promise from an async handler: without
+// this, one database hiccup leaves the caller hanging until it times out. The
+// app-level error handler in index.js turns next(err) into a clean 500.
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// A malformed stored JSON value must not take down a whole page of results.
+const parseJson = (text, fallback) => {
+  try { return text ? JSON.parse(text) : fallback; } catch { return fallback; }
+};
 
 /* -------------------------------- auth ----------------------------------- */
 
@@ -62,7 +73,7 @@ async function authenticateApiKey(req, res, next) {
   next();
 }
 
-externalRouter.use(authenticateApiKey);
+externalRouter.use(wrap(authenticateApiKey));
 
 function page(req, defLimit = 200, maxLimit = 1000) {
   const limit = Math.min(maxLimit, Math.max(1, Number(req.query.limit) || defLimit));
@@ -72,7 +83,7 @@ function page(req, defLimit = 200, maxLimit = 1000) {
 
 /* ------------------------------- summary ---------------------------------- */
 
-externalRouter.get('/summary', async (_req, res) => {
+externalRouter.get('/summary', wrap(async (_req, res) => {
   const totals = await db.prepare(
     "SELECT COUNT(*) registered, SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified, "
     + "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pending, "
@@ -87,8 +98,10 @@ externalRouter.get('/summary', async (_req, res) => {
     + 'WHERE answers_json IS NOT NULL'
   ).get();
   const coverage = await db.prepare(
-    'SELECT COUNT(DISTINCT lga) lgas, COUNT(DISTINCT ward) wards, '
-    + 'COUNT(DISTINCT polling_unit) polling_units FROM members'
+    // Ward and polling-unit names repeat across the state ("WARD I", "Unit
+    // 001"), so they are only distinct together with what contains them.
+    "SELECT COUNT(DISTINCT lga) lgas, COUNT(DISTINCT lga || '|' || ward) wards, "
+    + "COUNT(DISTINCT lga || '|' || ward || '|' || polling_unit) polling_units FROM members"
   ).get();
 
   res.json({
@@ -105,7 +118,7 @@ externalRouter.get('/summary', async (_req, res) => {
     coverage,
     surveys: { count: surveys.surveys || 0, responses: surveys.responses || 0 },
   });
-});
+}));
 
 /* ---------------------------- registrations -------------------------------- */
 
@@ -113,7 +126,7 @@ externalRouter.get('/summary', async (_req, res) => {
  * Every registered person: who, what level, where (LGA/ward/polling unit),
  * and their GPS location at registration. No phone, NIN, PVC or bank data.
  */
-externalRouter.get('/registrations', async (req, res) => {
+externalRouter.get('/registrations', wrap(async (req, res) => {
   const { limit, offset } = page(req);
   const where = ['1=1'];
   const params = [];
@@ -144,7 +157,7 @@ externalRouter.get('/registrations', async (req, res) => {
       registered_at: r.created_at,
     })),
   });
-});
+}));
 
 /* -------------------------------- surveys ---------------------------------- */
 
@@ -153,7 +166,7 @@ externalRouter.get('/registrations', async (req, res) => {
  * against its question's label (not just a raw question-id key), plus the
  * respondent's location. Filters mirror /registrations.
  */
-externalRouter.get('/surveys', async (req, res) => {
+externalRouter.get('/surveys', wrap(async (req, res) => {
   const { limit, offset } = page(req);
   const where = ['s.answers_json IS NOT NULL'];
   const params = [];
@@ -180,14 +193,14 @@ externalRouter.get('/surveys', async (req, res) => {
   const questionMaps = {};
   for (const tid of taskIds) {
     const t = await db.prepare('SELECT questions_json FROM tasks WHERE id = ?').get(tid);
-    const qs = t?.questions_json ? JSON.parse(t.questions_json) : [];
-    questionMaps[tid] = Object.fromEntries(qs.map((q) => [q.id, q.label]));
+    const qs = parseJson(t?.questions_json, []);
+    questionMaps[tid] = Object.fromEntries((Array.isArray(qs) ? qs : []).map((q) => [q.id, q.label]));
   }
 
   const shaped = rows.map((r) => {
-    const raw = r.answers_json ? JSON.parse(r.answers_json) : {};
+    const raw = parseJson(r.answers_json, {});
     const qmap = questionMaps[r.task_id] || {};
-    const answers = Object.entries(raw)
+    const answers = Object.entries(raw && typeof raw === 'object' ? raw : {})
       .filter(([, value]) => value !== '' && value != null)
       .map(([qid, value]) => ({ question: qmap[qid] || qid, value }));
     const lat = r.lat ?? r.member_lat;
@@ -206,7 +219,7 @@ externalRouter.get('/surveys', async (req, res) => {
     next_offset: offset + rows.length < total ? offset + rows.length : null,
     rows: shaped,
   });
-});
+}));
 
 /* -------------------------------- coverage --------------------------------- */
 
@@ -215,11 +228,10 @@ externalRouter.get('/surveys', async (req, res) => {
  * "members" in this app) rolled up at every geographic level the state uses
  * -- polling unit, ward, LGA, and the three electoral tiers above LGA
  * (senatorial district, federal constituency, state assembly constituency).
- * The three electoral tiers are folded in JS from the by-LGA counts using
- * the same LGA groupings the rest of the app uses, since the database only
- * stores the LGA a member is in, not which district that rolls up to.
+ * Senatorial and federal tiers are folded in JS from the by-LGA counts; state
+ * assembly seats from the by-ward counts, since some of them split an LGA.
  */
-externalRouter.get('/coverage', async (req, res) => {
+externalRouter.get('/coverage', wrap(async (req, res) => {
   const requestedLevel = req.query.level; // polling_unit|ward|lga|senatorial|federal|state_const
 
   const byPollingUnit = await db.prepare(
@@ -238,7 +250,7 @@ externalRouter.get('/coverage', async (req, res) => {
   const byLga = await db.prepare(
     'SELECT lga, COUNT(*) members, '
     + "SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) verified, "
-    + 'COUNT(DISTINCT ward) wards, COUNT(DISTINCT polling_unit) polling_units '
+    + "COUNT(DISTINCT ward) wards, COUNT(DISTINCT ward || '|' || polling_unit) polling_units "
     + 'FROM members GROUP BY lga ORDER BY lga'
   ).all();
 
@@ -254,11 +266,27 @@ externalRouter.get('/coverage', async (req, res) => {
     };
   });
 
+  // State Assembly seats split some LGAs (Akinyele I / II etc.), so they are
+  // built from wards, which ward-constituencies.js assigns to exactly one seat.
+  // These rows therefore partition the state and can be summed.
+  const byStateConst = Object.keys(STATE_CONST).map((name) => {
+    const wards = new Set(wardsInStateConstituency(name).map((w) => w.lga + '|' + w.ward));
+    const rows = byWard.filter((r) => wards.has(r.lga + '|' + r.ward));
+    return {
+      name,
+      lgas: STATE_CONST[name].length,
+      members: rows.reduce((a, r) => a + r.members, 0),
+      verified: rows.reduce((a, r) => a + (r.verified || 0), 0),
+      wards: rows.length,
+      polling_units: rows.reduce((a, r) => a + r.polling_units, 0),
+    };
+  });
+
   const result = {
     generated_at: nowISO(),
     by_senatorial_district: rollUp(SENATORIAL),
     by_federal_constituency: rollUp(FEDERAL),
-    by_state_constituency: rollUp(STATE_CONST),
+    by_state_constituency: byStateConst,
     by_lga: byLga,
     by_ward: byWard,
     by_polling_unit: byPollingUnit,
@@ -276,4 +304,4 @@ externalRouter.get('/coverage', async (req, res) => {
   }
 
   res.json(result);
-});
+}));
