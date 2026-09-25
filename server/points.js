@@ -10,6 +10,7 @@
 // is released only when the member and their downline have cleared mandatory
 // tasks for the period.
 
+import { taskAppliesTo } from './task-scope.js';
 import { db, period as currentPeriod, nowISO } from './db.js';
 
 export const NAIRA_PER_POINT = 100;
@@ -99,14 +100,12 @@ export async function pointsBreakdown(memberId, per = currentPeriod()) {
 
 /** Mandatory tasks that apply to a member for the period. */
 export async function mandatoryTasksFor(member, per = currentPeriod()) {
-  return await db.prepare(
+  const rows = await db.prepare(
     'SELECT * FROM tasks WHERE period = ? AND mandatory = 1 '
     + "AND status = 'open' "
-    + "AND (target_level = 'all' OR target_level = ?) "
-    + "AND (target_scope_type = 'state' "
-    + "     OR (target_scope_type = 'lga' AND target_scope_value = ?) "
-    + "     OR (target_scope_type = 'ward' AND target_scope_value = ?))"
-  ).all(per, member.level, member.lga, member.ward);
+    + "AND (target_level = 'all' OR target_level = ?)"
+  ).all(per, member.level);
+  return rows.filter((t) => taskAppliesTo(t, member.lga, member.ward));
 }
 
 export async function taskCompletion(member, per = currentPeriod()) {
@@ -115,10 +114,10 @@ export async function taskCompletion(member, per = currentPeriod()) {
 
   const ids = tasks.map((t) => t.id);
   const placeholders = ids.map(() => '?').join(',');
-  const done = await db.prepare(
+  const done = (await db.prepare(
     'SELECT task_id FROM submissions WHERE member_id = ? '
     + "AND status = 'approved' AND task_id IN (" + placeholders + ')'
-  ).all(member.id, ...ids).map((r) => r.task_id);
+  ).all(member.id, ...ids)).map((r) => r.task_id);
 
   const doneSet = new Set(done);
   const outstanding = tasks.filter((t) => !doneSet.has(t.id))

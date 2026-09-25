@@ -16,6 +16,14 @@ const TYPES = [
   { v: 'training', label: 'Training session', points: 5 },
 ];
 
+// A ward target is stored as "LGA|WARD" so two LGAs' same-named wards stay apart.
+const targetLabel = (t) => {
+  if (!t.target_scope_value) return '';
+  const [a, b] = String(t.target_scope_value).split('|');
+  return b ? b + ', ' + a : a;
+};
+const FORM_SCOPES = ['state', 'lga', 'ward'];
+
 const BLANK_TASK = {
   title: '', description: '', type: 'canvass', points: 5, mandatory: true,
   requires_location: true, target_level: 'all',
@@ -123,7 +131,9 @@ function TaskSubmissionForm({ task, onClose, onSubmitted }) {
   );
 }
 
-function TaskForm({ geo, task = null, period, onSave, onClose }) {
+function TaskForm({ geo, task = null, period, onSave, onClose, isAdmin, jurisdiction }) {
+  const blank = isAdmin ? BLANK_TASK
+    : { ...BLANK_TASK, target_scope_type: 'jurisdiction', mandatory: false };
   const initialTask = task ? {
     title: task.title || '',
     description: task.description || '',
@@ -132,12 +142,14 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
     mandatory: task.mandatory !== false,
     requires_location: true,
     target_level: task.target_level || 'all',
-    target_scope_type: task.target_scope_type || 'state',
+    target_scope_type: FORM_SCOPES.includes(task.target_scope_type) ? task.target_scope_type : 'jurisdiction',
     target_scope_value: task.target_scope_value || '',
     questions: Array.isArray(task.questions) ? task.questions : [],
-  } : BLANK_TASK;
+  } : blank;
 
   const [t, setT] = useState(initialTask);
+  const [wardLga, setWardLga] = useState(
+    initialTask.target_scope_type === 'ward' ? String(initialTask.target_scope_value).split('|')[0] : '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -162,6 +174,7 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
     setBusy(true); setError('');
     try {
       const payload = { ...t, points: Number(t.points), period: task?.period || period };
+      if (t.target_scope_type === 'jurisdiction') payload.target_scope_value = null;
       if (task?.id) {
         await api.patch('/tasks/' + task.id, payload);
       } else {
@@ -174,7 +187,9 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
   return (
     <Modal title={task ? 'Edit task' : 'Create a task'} onClose={onClose} footer={
       <div className="btn-row">
-        <button className="btn" onClick={save} disabled={busy || !t.title.trim()}>
+        <button className="btn" onClick={save}
+                disabled={busy || !t.title.trim()
+                  || (['lga', 'ward'].includes(t.target_scope_type) && !t.target_scope_value)}>
           {busy && <span className="spinner" />} {task ? 'Save changes' : 'Create task'}
         </button>
         <button className="btn secondary" onClick={onClose}>Cancel</button>
@@ -205,14 +220,18 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
       <div className="grid grid-2">
         <Field label="Who must do this">
           <select value={t.target_level} onChange={set('target_level')}>
-            <option value="all">All Unit Promoters</option>
+            <option value="all">Everyone (Unit Promoters and Grassroots)</option>
             <option value="mobiliser">Unit Promoters only</option>
+            <option value="grassroot">Grassroots only</option>
           </select>
         </Field>
         <Field label="Where">
-          <select value={t.target_scope_type} onChange={set('target_scope_type')}>
-            <option value="state">Whole state</option>
+          <select value={t.target_scope_type} onChange={(e) => { setWardLga(''); set('target_scope_type')(e); }}>
+            {isAdmin
+              ? <option value="state">Whole state</option>
+              : <option value="jurisdiction">My whole jurisdiction ({jurisdiction})</option>}
             <option value="lga">A single LGA</option>
+            <option value="ward">A single ward</option>
           </select>
         </Field>
       </div>
@@ -224,6 +243,26 @@ function TaskForm({ geo, task = null, period, onSave, onClose }) {
             {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </Field>
+      )}
+      {t.target_scope_type === 'ward' && geo && (
+        <div className="grid grid-2">
+          <Field label="Local Government Area" required>
+            <select value={wardLga} onChange={(e) => {
+              setWardLga(e.target.value); setT((s) => ({ ...s, target_scope_value: '' }));
+            }}>
+              <option value="">Select an LGA</option>
+              {geo.lgas.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </Field>
+          <Field label="Ward" required>
+            <select value={t.target_scope_value} disabled={!wardLga} onChange={set('target_scope_value')}>
+              <option value="">Select a ward</option>
+              {(geo.wards[wardLga] || []).map((w) => (
+                <option key={w} value={wardLga + '|' + w}>{w}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
       )}
 
       <div className="section-title">Requirements</div>
@@ -289,6 +328,12 @@ export default function Tasks() {
   }, [period]);
   useEffect(() => { api.get('/geo').then(setGeo).catch(() => {}); }, []);
 
+  const isAdmin = me.permissions.is_admin;
+  const isCandidate = isCandidateRole(me.user.role);
+  const canCreate = isAdmin || isCandidate;
+  const canManage = (t) => isAdmin || (isCandidate && Number(t.created_by) === Number(me.user.id));
+  const jurisdiction = me.user.scope_value || 'Oyo State';
+
   const toggle = async (t) => {
     try {
       await api.patch('/tasks/' + t.id, { status: t.status === 'open' ? 'closed' : 'open' });
@@ -315,11 +360,13 @@ export default function Tasks() {
   return (
     <>
       {creating && (
-        <TaskForm geo={geo} period={period} onClose={() => setCreating(false)}
+        <TaskForm geo={geo} period={period} isAdmin={isAdmin} jurisdiction={jurisdiction}
+                  onClose={() => setCreating(false)}
                   onSave={() => { setCreating(false); load(); }} />
       )}
       {editingTask && (
-        <TaskForm geo={geo} task={editingTask} period={period} onClose={() => setEditingTask(null)}
+        <TaskForm geo={geo} task={editingTask} period={period} isAdmin={isAdmin} jurisdiction={jurisdiction}
+                  onClose={() => setEditingTask(null)}
                   onSave={() => { setEditingTask(null); load(); }} />
       )}
       {selectedTask && (
@@ -341,8 +388,10 @@ export default function Tasks() {
         <input id="task-period" type="month" value={period} style={{ width: 'auto' }}
           onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} />
         <div className="spacer" />
-        {me.permissions.is_admin && (
-          <button className="btn sm" onClick={() => setCreating(true)}>+ Create task</button>
+        {canCreate && (
+          <button className="btn sm" onClick={() => setCreating(true)}>
+            + Create task{isAdmin ? '' : ' for my jurisdiction'}
+          </button>
         )}
       </div>
 
@@ -355,7 +404,7 @@ export default function Tasks() {
             bodyClass="">
         {data.rows.length === 0 ? (
           <Empty title="No tasks for this period">
-            {me.permissions.is_admin
+            {canCreate
               ? 'Create the first task to start field activity.'
               : 'The programme office has not published tasks yet.'}
           </Empty>
@@ -368,7 +417,7 @@ export default function Tasks() {
                   <th className="num">Points</th><th>Requires</th>
                   <th className="num">Submitted</th><th className="num">Approved</th>
                   <th>Status</th>
-                  {me.permissions.is_admin && <th></th>}
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -385,9 +434,11 @@ export default function Tasks() {
                     </td>
                     <td><span className="badge">{t.type.replace(/_/g, ' ')}</span></td>
                     <td>
-                      {t.target_level === 'all' ? 'All levels' : (LEVEL_LABEL[t.target_level] || t.target_level) + 's'}
+                      {t.target_level === 'all' ? 'All levels'
+                        : t.target_level === 'grassroot' ? 'Grassroots'
+                        : (LEVEL_LABEL[t.target_level] || t.target_level) + 's'}
                       {t.target_scope_value && (
-                        <div className="muted" style={{ fontSize: 12 }}>{t.target_scope_value}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{targetLabel(t)}</div>
                       )}
                     </td>
                     <td className="num" style={{ fontWeight: 600 }}>{t.points}</td>
@@ -400,7 +451,7 @@ export default function Tasks() {
                     <td className="num">{num(t.submissions)}</td>
                     <td className="num">{num(t.approved)}</td>
                     <td><Status value={t.status} /></td>
-                    {!me.permissions.is_admin && (
+                    {!canManage(t) && (
                       <td className="task-action-cell">
                         {me.user.member_id ? (
                           <button className="btn sm secondary task-action-btn" onClick={() => setSelectedTask(t)}>
@@ -413,7 +464,7 @@ export default function Tasks() {
                         )}
                       </td>
                     )}
-                    {me.permissions.is_admin && (
+                    {canManage(t) && (
                       <td className="task-action-cell">
                         <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
                           <button className="btn sm secondary task-action-btn" onClick={() => setEditingTask(t)}>

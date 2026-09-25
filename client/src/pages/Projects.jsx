@@ -161,9 +161,9 @@ function AddProject({ framework, geo, onClose, onSaved }) {
             </Field>
           </div>
 
+          {lga && <WardMap lga={lga} ward={ward} sites={sites} onChange={setSites} readOnly={!ward} />}
           {ward && (
             <>
-              <WardMap lga={lga} ward={ward} sites={sites} onChange={setSites} />
               {sites.length > 0 ? (
                 <Alert type="info">
                   <strong>{sites.length}</strong> location{sites.length === 1 ? '' : 's'} pinned —

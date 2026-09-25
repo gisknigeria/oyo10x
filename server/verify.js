@@ -150,7 +150,7 @@ export async function findDuplicates(m, excludeId = null) {
     if (!value) return;
     const rows = await db.prepare(
       'SELECT id, code, first_name, last_name, lga, ward FROM members '
-      + 'WHERE ' + field + ' = ? AND status != \'rejected\' AND id IS NOT ?'
+      + 'WHERE ' + field + ' = ? AND status != \'rejected\' AND id IS DISTINCT FROM ?'
     ).all(value, excludeId);
     for (const r of rows) dupes.push({ field: label, value, match: r });
   };
@@ -173,7 +173,7 @@ export async function findClustering(m, uplineUserId, excludeId = null) {
 
   const sameName = await db.prepare(
     'SELECT COUNT(*) n FROM members WHERE LOWER(last_name) = LOWER(?) '
-    + "AND polling_unit = ? AND status != 'rejected' AND id IS NOT ?"
+    + "AND polling_unit = ? AND status != 'rejected' AND id IS DISTINCT FROM ?"
   ).get(m.last_name, m.polling_unit, excludeId).n;
   if (sameName >= 3) {
     flags.push({ code: 'surname_cluster', weight: 25,
@@ -185,7 +185,7 @@ export async function findClustering(m, uplineUserId, excludeId = null) {
   if (account) {
     const sameAccount = await db.prepare(
       "SELECT COUNT(*) n FROM members WHERE account_number = ? "
-      + "AND status != 'rejected' AND id IS NOT ?"
+      + "AND status != 'rejected' AND id IS DISTINCT FROM ?"
     ).get(account, excludeId).n;
     if (sameAccount >= 1) {
       flags.push({ code: 'shared_account', weight: 40,

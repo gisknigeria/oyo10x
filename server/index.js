@@ -14,6 +14,11 @@ import { externalRouter, generateApiKey } from './external.js';
 import { makeLimiter } from './rate-limit.js';
 import { memberScope, scopedLgas, scopedWards } from './scope.js';
 import { storePublicFile, warnIfNotDurable } from './storage.js';
+import { importGrassrootsOnce } from './seed-grassroots.js';
+import { userArea, canTarget, taskAppliesTo } from './task-scope.js';
+import {
+  wardBoundary, wardPosition, grid3Status, syncFromGrid3, loadFeatures, syncGrid3IfEmpty, lgaView,
+} from './grid3.js';
 import {
   SCALES, SCALE_IDS, SECTORS, FRAMEWORK, PROJECT_STATUSES, STATUS_IDS, isFrameworkProject,
 } from './data/project-framework.js';
@@ -912,15 +917,19 @@ function validateSites(raw) {
 /**
  * Roughly where a ward is, so the map can open near it.
  *
- * There is no ward boundary data in this app -- polling units are names, not
- * shapes. What we do have is a GPS fix on every registration, so the average
- * of those is a decent centre for any ward with people in it. A ward with no
- * registrations yet returns nothing and the map falls back to a wider view.
+ * The GRID3 boundary's centroid when one is loaded (see grid3.js); otherwise
+ * the average GPS fix of people already registered in the ward. A ward with
+ * neither returns nothing and the map falls back to a wider view.
  */
 app.get('/api/geo/ward-centre', authenticate, wrap(async (req, res) => {
   const lga = String(req.query.lga || '').trim();
   const ward = String(req.query.ward || '').trim();
   if (!lga || !ward) return res.status(400).json({ error: 'Give an LGA and a ward' });
+
+  const boundary = await wardBoundary(lga, ward);
+  if (boundary?.lat != null) {
+    return res.json({ lat: boundary.lat, lng: boundary.lng, from: 'grid3', members: null });
+  }
 
   const row = await db.prepare(
     'SELECT AVG(lat) lat, AVG(lng) lng, COUNT(*) n FROM members '
@@ -931,6 +940,39 @@ app.get('/api/geo/ward-centre', authenticate, wrap(async (req, res) => {
     return res.json({ lat: null, lng: null, from: 'none', members: 0 });
   }
   res.json({ lat: row.lat, lng: row.lng, from: 'registrations', members: Number(row.n) });
+}));
+
+/** Where the project map should fly when an LGA is picked. */
+app.get('/api/geo/lga-view', authenticate, wrap(async (req, res) => {
+  const lga = String(req.query.lga || '').trim();
+  if (!LGAS.includes(lga)) return res.status(400).json({ error: 'Unknown LGA' });
+  res.json(await lgaView(lga));
+}));
+
+/**
+ * The GRID3 outline of a ward, for drawing on the project map. With lat/lng it
+ * also says whether that point is inside the ward.
+ */
+app.get('/api/geo/ward-boundary', authenticate, wrap(async (req, res) => {
+  const lga = String(req.query.lga || '').trim();
+  const ward = String(req.query.ward || '').trim();
+  if (!lga || !ward) return res.status(400).json({ error: 'Give an LGA and a ward' });
+  const boundary = await wardBoundary(lga, ward);
+  if (!boundary) return res.json({ found: false });
+  const lat = req.query.lat != null && req.query.lat !== '' ? Number(req.query.lat) : null;
+  const lng = req.query.lng != null && req.query.lng !== '' ? Number(req.query.lng) : null;
+  res.json({
+    found: true,
+    lga: boundary.lga,
+    ward: boundary.ward,
+    grid3_name: boundary.grid3_name,
+    grid3_code: boundary.grid3_code,
+    centre: boundary.lat != null ? { lat: boundary.lat, lng: boundary.lng } : null,
+    geometry: boundary.geometry,
+    source: boundary.source,
+    position: Number.isFinite(lat) && Number.isFinite(lng)
+      ? await wardPosition(lga, ward, lat, lng) : null,
+  });
 }));
 
 /** The picklists: 20 sectors x 3 scales x 6 projects, plus status options. */
@@ -1269,15 +1311,47 @@ app.get('/api/tasks', authenticate, wrap(async (req, res) => {
   }
   const rows = await taskReport(db, {
     scope: memberScope(req.user), period: per, isAdmin: ADMIN_ROLES.has(req.user.role),
-    lgas: scopedLgas(req.user),
-    ward: req.user.scope_type === 'ward' ? req.user.scope_value : null,
+    area: userArea(req.user),
   });
   res.json({ period: per, rows, activity_points: ACTIVITY_POINTS });
 }));
 
-app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
+// Administrators manage every task. A candidate may set tasks for people in
+// their own jurisdiction, and edit or delete only the tasks they created.
+const isAdminUser = (user) => ADMIN_ROLES.has(normaliseRole(user.role));
+const requireTaskAuthor = (req, res, next) =>
+  (isAdminUser(req.user) || isCandidateRole(req.user.role)) ? next()
+    : res.status(403).json({ error: 'Only administrators and candidates can manage tasks' });
+
+async function ownedTask(user, id) {
+  const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+  if (!task) return { status: 404, error: 'Task not found' };
+  if (!isAdminUser(user) && Number(task.created_by) !== Number(user.id)) {
+    return { status: 403, error: 'You can only change tasks you created' };
+  }
+  return { task };
+}
+
+/** The target a task will be saved with, defaulting a candidate to their whole jurisdiction. */
+function taskTarget(user, b, existing = null) {
+  let type = b.target_scope_type || existing?.target_scope_type;
+  let value = b.target_scope_value ?? existing?.target_scope_value ?? null;
+  if (!type) {
+    type = isAdminUser(user) ? 'state' : (user.scope_type || 'state');
+    value = isAdminUser(user) ? null : (user.scope_value || null);
+  }
+  if (type === 'jurisdiction') { type = user.scope_type || 'state'; value = user.scope_value || null; }
+  if (type === 'state') value = null;
+  if (type !== 'state' && !value) return { error: 'Choose where this task applies' };
+  if (!canTarget(user, type, value)) return { error: 'You can only set tasks inside your own jurisdiction' };
+  return { type, value };
+}
+
+app.post('/api/tasks', authenticate, requireTaskAuthor, wrap(async (req, res) => {
   const b = req.body || {};
   if (!String(b.title || '').trim()) return res.status(400).json({ error: 'Task title is required' });
+  const target = taskTarget(req.user, b);
+  if (target.error) return res.status(403).json({ error: target.error });
 
   const info = await db.prepare(
     'INSERT INTO tasks (title,description,type,points,mandatory,requires_photo,requires_location,'
@@ -1289,7 +1363,7 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
     b.mandatory === false ? 0 : 1,
     0, 1, // photo evidence retired; GPS is mandatory for every submission
     b.questions ? JSON.stringify(b.questions) : null,
-    b.target_level || 'all', b.target_scope_type || 'state', b.target_scope_value || null,
+    b.target_level || 'all', target.type, target.value,
     b.period || currentPeriod(), b.opens_at || null, b.due_at || null,
     'open', req.user.id, nowISO()
   );
@@ -1298,10 +1372,11 @@ app.post('/api/tasks', authenticate, requireAdmin, wrap(async (req, res) => {
   res.status(201).json({ id: Number(info.lastInsertRowid) });
 }));
 
-app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) => {
+app.patch('/api/tasks/:id', authenticate, requireTaskAuthor, wrap(async (req, res) => {
   const b = req.body || {};
-  const task = await db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const found = await ownedTask(req.user, req.params.id);
+  if (found.error) return res.status(found.status).json({ error: found.error });
+  const { task } = found;
 
   if (Object.prototype.hasOwnProperty.call(b, 'status')) {
     const { status } = b;
@@ -1314,6 +1389,8 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
 
   const title = String(b.title ?? task.title ?? '').trim();
   if (!title) return res.status(400).json({ error: 'Task title is required' });
+  const target = taskTarget(req.user, b, task);
+  if (target.error) return res.status(403).json({ error: target.error });
 
   const payload = {
     title,
@@ -1327,8 +1404,8 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
       ? b.questions
       : (task.questions_json ? JSON.parse(task.questions_json || '[]') : []),
     target_level: b.target_level || task.target_level || 'all',
-    target_scope_type: b.target_scope_type || task.target_scope_type || 'state',
-    target_scope_value: b.target_scope_value ?? task.target_scope_value ?? null,
+    target_scope_type: target.type,
+    target_scope_value: target.value,
     period: b.period || task.period || currentPeriod(),
     opens_at: b.opens_at ?? task.opens_at ?? null,
     due_at: b.due_at ?? task.due_at ?? null,
@@ -1353,10 +1430,11 @@ app.patch('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) =>
   res.json({ ok: true, updated: 'task' });
 }));
 
-app.delete('/api/tasks/:id', authenticate, requireAdmin, wrap(async (req, res) => {
+app.delete('/api/tasks/:id', authenticate, requireTaskAuthor, wrap(async (req, res) => {
   const taskId = Number(req.params.id);
-  const task = await db.prepare('SELECT id, title FROM tasks WHERE id = ?').get(taskId);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
+  const found = await ownedTask(req.user, taskId);
+  if (found.error) return res.status(found.status).json({ error: found.error });
+  const { task } = found;
 
   await db.transaction(async (tx) => {
     await tx.prepare("DELETE FROM points_ledger WHERE source = 'task' AND source_id = ?").run(taskId);
@@ -1379,13 +1457,10 @@ app.get('/api/tasks/for-member/:memberId', authenticate, wrap(async (req, res) =
   const completion = await taskCompletion(m, per);
   const subs = await db.prepare('SELECT * FROM submissions WHERE member_id = ?').all(m.id);
   const byTask = new Map(subs.map((s) => [s.task_id, s]));
-  const all = await db.prepare(
+  const all = (await db.prepare(
     'SELECT * FROM tasks WHERE period = ? '
-    + "AND (target_level = 'all' OR target_level = ?) "
-    + "AND (target_scope_type = 'state' "
-    + "     OR (target_scope_type = 'lga' AND target_scope_value = ?) "
-    + "     OR (target_scope_type = 'ward' AND target_scope_value = ?))"
-  ).all(per, m.level, m.lga, m.ward);
+    + "AND (target_level = 'all' OR target_level = ?)"
+  ).all(per, m.level)).filter((t) => taskAppliesTo(t, m.lga, m.ward));
 
   res.json({
     member: { id: m.id, code: m.code, name: m.first_name + ' ' + m.last_name, level: m.level },
@@ -1418,6 +1493,9 @@ app.post('/api/tasks/:id/submit', authenticate, upload.single('photo'), wrap(asy
   const m = await db.prepare('SELECT * FROM members WHERE id = ? AND (' + scope.sql + ')')
     .get(memberId, ...scope.params);
   if (!m) return res.status(403).json({ error: 'That member is outside your scope' });
+  if (!taskAppliesTo(task, m.lga, m.ward)) {
+    return res.status(403).json({ error: 'This task is not set for that member\'s area' });
+  }
 
   const lat = req.body.lat ? Number(req.body.lat) : null;
   const lng = req.body.lng ? Number(req.body.lng) : null;
@@ -1573,8 +1651,7 @@ app.get('/api/dashboard', authenticate, wrap(async (req, res) => {
     scope,
     period: per,
     isAdmin: ADMIN_ROLES.has(req.user.role),
-    lgas: scopedLgas(req.user),
-    ward: req.user.scope_type === 'ward' ? req.user.scope_value : null,
+    area: userArea(req.user),
   });
   const surveyTasks = taskRows
     .filter((task) => task.type === 'survey' && task.status === 'open')
@@ -1983,6 +2060,47 @@ app.post('/api/admin/voter-roll', authenticate, requireAdmin, upload.single('fil
     res.json({ ...result, total: voterRollSize() });
   }));
 
+/* --------------------------- GRID3 ward boundaries -------------------------- */
+
+app.get('/api/admin/grid3', authenticate, requireAdmin, wrap(async (_req, res) => {
+  res.json(await grid3Status());
+}));
+
+app.post('/api/admin/grid3/sync', authenticate, requireAdmin, wrap(async (req, res) => {
+  try {
+    const result = await syncFromGrid3();
+    await audit(req.user.id, req.user.username, 'grid3_synced', null, null,
+      { matched: result.matched, unmatched: result.unmatched.length }, ip(req));
+    res.status(result.ok ? 200 : 422).json({ ...result, status: await grid3Status() });
+  } catch (error) {
+    res.status(502).json({ error: 'Could not reach GRID3: ' + error.message
+      + '. Download the ward boundaries GeoJSON from data.grid3.org and upload it instead.' });
+  }
+}));
+
+// Its own uploader: GRID3's whole-of-Nigeria ward file is far larger than the
+// 8 MB evidence-photo limit, and it is read once and discarded.
+const geojsonUpload = multer({ dest: UPLOAD_DIR, limits: { fileSize: 300 * 1024 * 1024 } });
+
+app.post('/api/admin/grid3/upload', authenticate, requireAdmin, geojsonUpload.single('file'),
+  wrap(async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Attach a GeoJSON file' });
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(req.file.path, 'utf8'));
+    } catch {
+      return res.status(400).json({ error: 'That file is not valid GeoJSON' });
+    } finally {
+      fs.rm(req.file.path, { force: true }, () => {});
+    }
+    const features = data.type === 'FeatureCollection' ? data.features
+      : Array.isArray(data) ? data : [data];
+    const result = await loadFeatures(features, 'GRID3 upload: ' + (req.file.originalname || 'file'));
+    await audit(req.user.id, req.user.username, 'grid3_uploaded', null, null,
+      { matched: result.matched, unmatched: result.unmatched.length }, ip(req));
+    res.status(result.ok ? 200 : 422).json({ ...result, status: await grid3Status() });
+  }));
+
 app.post('/api/admin/voter-roll/clear', authenticate, requireAdmin, wrap(async (req, res) => {
   const n = clearVoterRoll();
   audit(req.user.id, req.user.username, 'voter_roll_cleared', null, null, { rows: n }, ip(req));
@@ -2293,6 +2411,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log('OYO 10X API listening on port ' + PORT);
   warnIfNotDurable();
   await maybeSeed();
+  await importGrassrootsOnce();
+  await syncGrid3IfEmpty();
   const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');
 });
