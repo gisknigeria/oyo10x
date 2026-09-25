@@ -236,6 +236,42 @@ export async function syncFromGrid3(url = GRID3_WARDS_URL) {
 
 /* ------------------------------- lookups ----------------------------------- */
 
+// Approximate LGA headquarters, so the project map can fly to an LGA even
+// before GRID3 boundaries are loaded. Only used to position the map.
+export const LGA_HQ = {
+  Afijio: [7.93, 3.9], Akinyele: [7.53, 3.91], Atiba: [7.87, 3.99], Atisbo: [8.55, 3.45],
+  Egbeda: [7.38, 3.97], 'Ibadan North': [7.41, 3.91], 'Ibadan North-East': [7.4, 3.93],
+  'Ibadan North-West': [7.39, 3.88], 'Ibadan South-East': [7.37, 3.9], 'Ibadan South-West': [7.36, 3.87],
+  'Ibarapa Central': [7.43, 3.29], 'Ibarapa East': [7.54, 3.42], 'Ibarapa North': [7.6, 3.23],
+  Ido: [7.51, 3.73], Irepo: [9.08, 3.85], Iseyin: [7.97, 3.6], Itesiwaju: [8.25, 3.67],
+  Iwajowa: [8.05, 3.17], Kajola: [8.03, 3.35], Lagelu: [7.45, 4.02], 'Ogbomosho North': [8.13, 4.24],
+  'Ogbomosho South': [8.11, 4.25], 'Ogo Oluwa': [7.97, 4.18], Olorunsogo: [8.75, 4.13],
+  Oluyole: [7.25, 3.87], 'Ona Ara': [7.28, 4.05], Orelope: [8.83, 3.75], 'Ori Ire': [8.15, 4.12],
+  'Oyo East': [7.85, 3.95], 'Oyo West': [7.84, 3.92], 'Saki East': [8.6, 3.6], 'Saki West': [8.67, 3.39],
+  Surulere: [8.08, 4.39],
+};
+
+/**
+ * Where to point the map for an LGA: the bounding box of its GRID3 wards
+ * when loaded, otherwise its headquarters town.
+ */
+export async function lgaView(lga) {
+  const rows = await db.prepare('SELECT geometry FROM grid3_wards WHERE lga = ?').all(lga);
+  if (rows.length) {
+    let s = 90; let w = 180; let n = -90; let e = -180;
+    for (const r of rows) {
+      for (const poly of polygonsOf(JSON.parse(r.geometry))) {
+        for (const [x, y] of poly[0]) {
+          if (y < s) s = y; if (y > n) n = y; if (x < w) w = x; if (x > e) e = x;
+        }
+      }
+    }
+    return { bounds: [[s, w], [n, e]], from: 'grid3' };
+  }
+  const hq = LGA_HQ[lga];
+  return hq ? { centre: { lat: hq[0], lng: hq[1] }, from: 'hq' } : { from: 'none' };
+}
+
 const cache = new Map();
 
 export async function wardBoundary(lga, ward) {

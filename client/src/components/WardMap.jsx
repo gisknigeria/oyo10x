@@ -17,6 +17,8 @@ const pinIcon = L.divIcon({
 const OYO_CENTRE = [8.15, 3.65];
 const OYO_ZOOM = 8;
 const WARD_ZOOM = 13;
+const LGA_ZOOM = 11;
+const FLY_SECONDS = 1.2;
 
 // Ray-casting point-in-polygon over a GeoJSON Polygon/MultiPolygon.
 function inGeometry(g, lat, lng) {
@@ -66,46 +68,66 @@ export default function WardMap({ lga, ward, sites, onChange, readOnly = false, 
     const m = map.current;
     if (!m) return;
     const onClick = (e) => {
-      if (readOnly) return;
+      if (readOnly || !ward) return;
       onChange([...sites, { lat: e.latlng.lat, lng: e.latlng.lng, label: '' }]);
     };
     m.on('click', onClick);
     return () => m.off('click', onClick);
-  }, [sites, onChange, readOnly]);
+  }, [sites, onChange, readOnly, ward]);
 
-  // Outline the ward from GRID3 and recentre when it changes.
+  // Glide to the LGA as soon as it is picked, then on to the ward, outlining
+  // the ward from GRID3 when boundaries are loaded.
   useEffect(() => {
     const m = map.current;
-    if (!m || !lga || !ward) return;
+    if (!m || !lga) return;
     let cancelled = false;
+    const live = () => !cancelled && map.current;
+    // A read-only map with pins frames the pins instead (see below).
+    const move = !(readOnly && sites.length);
+    const glideTo = (latlng, zoom) => move && map.current.flyTo(latlng, zoom, { duration: FLY_SECONDS });
+    const glideToBounds = (bounds) => move
+      && map.current.flyToBounds(bounds, { duration: FLY_SECONDS, padding: [12, 12] });
+
     setCentreNote('');
     outline.current?.remove();
     outline.current = null;
     setBoundary(null);
+
+    const flyToLga = () => api.get('/geo/lga-view?lga=' + encodeURIComponent(lga)).then((v) => {
+      if (!live()) return;
+      if (v.bounds) glideToBounds(v.bounds);
+      else if (v.centre) glideTo([v.centre.lat, v.centre.lng], LGA_ZOOM);
+    });
+
+    if (!ward) {
+      flyToLga().catch(() => {});
+      return () => { cancelled = true; };
+    }
+
     const q = '?lga=' + encodeURIComponent(lga) + '&ward=' + encodeURIComponent(ward);
     api.get('/geo/ward-boundary' + q)
       .then((b) => {
-        if (cancelled || !map.current) return;
+        if (!live()) return;
         if (b.found) {
           outline.current = L.geoJSON(b.geometry, {
             style: { color: '#0b7a3e', weight: 2, fillOpacity: 0.06 },
             interactive: false,
           }).addTo(map.current);
           setBoundary(b.geometry);
-          if (!(readOnly && sites.length)) map.current.fitBounds(outline.current.getBounds().pad(0.05));
+          glideToBounds(outline.current.getBounds().pad(0.05));
           setCentreNote('Ward boundary from GRID3.');
           return;
         }
         return api.get('/geo/ward-centre' + q).then((r) => {
-          if (cancelled || !map.current) return;
+          if (!live()) return;
           if (r.lat != null) {
-            map.current.setView([r.lat, r.lng], WARD_ZOOM);
+            glideTo([r.lat, r.lng], WARD_ZOOM);
             setCentreNote('Centred on ' + r.members + ' registration'
               + (r.members === 1 ? '' : 's') + ' in this ward.');
           } else {
-            map.current.setView(OYO_CENTRE, OYO_ZOOM);
-            setCentreNote('No boundary or registrations for this ward yet, so the map cannot '
-              + 'centre on it. Pan and zoom to the right place.');
+            setCentreNote('No boundary for this ward yet, so the map shows the LGA. '
+              + 'Zoom in to the right place.');
+            return flyToLga();
           }
         });
       })
