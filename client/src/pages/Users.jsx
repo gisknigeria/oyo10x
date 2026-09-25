@@ -507,6 +507,76 @@ function PasswordResetRequests() {
   );
 }
 
+function Grid3Panel() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [report, setReport] = useState(null);
+
+  useEffect(() => { api.get('/admin/grid3').then(setStatus).catch((e) => setError(e.message)); }, []);
+
+  const done = (r) => { setReport(r); if (r.status) setStatus(r.status); };
+  const sync = async () => {
+    setBusy(true); setError(''); setReport(null);
+    try { done(await api.post('/admin/grid3/sync')); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const upload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setBusy(true); setError(''); setReport(null);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      done(await api.form('/admin/grid3/upload', body));
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  if (!status) return error ? <Alert type="error">{error}</Alert> : null;
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <Card title="GRID3 ward boundaries"
+            note="Outlines the chosen ward on the project map and warns when a project pin is outside it"
+            bodyClass="">
+        {error && <Alert type="error" onClose={() => setError('')}>{error}</Alert>}
+        <div className="toolbar" style={{ marginBottom: 8 }}>
+          <span className="muted">
+            {num(status.wards_loaded)} of {num(status.total_wards)} wards loaded
+            {status.loaded_at ? ' · ' + timeAgo(status.loaded_at) : ''}
+          </span>
+          <div className="spacer" />
+          <button className="btn sm" onClick={sync} disabled={busy}>
+            {busy && <span className="spinner" />} Sync from GRID3
+          </button>
+          <label className="btn sm secondary" style={{ cursor: busy ? 'default' : 'pointer' }}>
+            Upload GeoJSON
+            <input type="file" accept=".geojson,.json,application/geo+json,application/json"
+                   onChange={upload} disabled={busy} style={{ display: 'none' }} />
+          </label>
+        </div>
+        {status.source && <div className="hint">Source: {status.source}</div>}
+        {!status.wards_loaded && (
+          <div className="hint">
+            If the sync cannot reach GRID3, download the Nigeria ward boundaries GeoJSON from
+            data.grid3.org and upload it here. Wards outside Oyo State are ignored.
+          </div>
+        )}
+        {report && (
+          <Alert type={report.ok ? 'success' : 'warn'} onClose={() => setReport(null)}>
+            {report.ok ? 'Matched ' + num(report.matched) + ' wards.' : report.error + '.'}
+            {report.unmatched?.length > 0 && (
+              ' ' + num(report.unmatched.length) + ' GRID3 wards could not be matched to a ward name: '
+              + report.unmatched.slice(0, 12).join('; ') + (report.unmatched.length > 12 ? ' …' : '')
+            )}
+          </Alert>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function ApiKeysPanel() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState('');
@@ -715,6 +785,7 @@ export default function Users() {
 
       <PasswordResetRequests />
       {!isDg && <ApiKeysPanel />}
+      {!isDg && <Grid3Panel />}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="Total logins" value={num(rows.length)} accent />

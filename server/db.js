@@ -406,6 +406,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at TEXT,
   revoked_at   TEXT
 );
+
+-- GRID3 ward boundaries, matched to the ward names in geo.js (see grid3.js).
+CREATE TABLE IF NOT EXISTS grid3_wards (
+  lga        TEXT NOT NULL,
+  ward       TEXT NOT NULL,
+  grid3_name TEXT,
+  grid3_code TEXT,
+  geometry   TEXT NOT NULL,
+  lat        DOUBLE PRECISION,
+  lng        DOUBLE PRECISION,
+  source     TEXT,
+  loaded_at  TEXT NOT NULL,
+  PRIMARY KEY (lga, ward)
+);
 `);
 
   // Additive migrations. Postgres has IF NOT EXISTS for this, so an existing

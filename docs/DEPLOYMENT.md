@@ -140,3 +140,34 @@ curl http://localhost:4000/api/health
 
 A `{"status":"ok","seeded":true,...}` response means the same thing will happen
 on the host you choose.
+
+---
+
+## BSA-YV grassroot accounts
+
+`server/data/bsa-yv-members.js` holds the 2,103 BSA-YV members. On boot the
+server creates a Grassroot login for each one, once per database (an audit_log
+row marks it done, so deleted accounts are not recreated). Username is the
+member's phone number, or `bsayv-<S/N>` where the sheet has no valid unique
+phone. Everyone starts on `Password1234` and must change it at first sign-in.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GRASSROOT_PASSWORD` | `Password1234` | Starting password for the import |
+| `GRASSROOT_IMPORT_ON_BOOT` | on | Set `0` to skip the boot import |
+
+Run it by hand instead with `npm run seed:grassroots` (`--dry-run`,
+`--reset-passwords`).
+
+## GRID3 ward boundaries (project map)
+
+The project map outlines the chosen ward from GRID3 and warns when a project
+pin is outside it. On boot the server tries to pull Oyo's wards from the GRID3
+ArcGIS service once; if that fails, go to **Platform accounts → GRID3 ward
+boundaries** and either press *Sync from GRID3* or upload the ward boundaries
+GeoJSON downloaded from data.grid3.org.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GRID3_WARDS_URL` | GRID3 NGA operational wards FeatureServer layer | Where *Sync* reads from |
+| `GRID3_SYNC_ON_BOOT` | on | Set `0` to skip the boot sync |

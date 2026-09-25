@@ -14,6 +14,10 @@ import { externalRouter, generateApiKey } from './external.js';
 import { makeLimiter } from './rate-limit.js';
 import { memberScope, scopedLgas, scopedWards } from './scope.js';
 import { storePublicFile, warnIfNotDurable } from './storage.js';
+import { importGrassrootsOnce } from './seed-grassroots.js';
+import {
+  wardBoundary, wardPosition, grid3Status, syncFromGrid3, loadFeatures, syncGrid3IfEmpty,
+} from './grid3.js';
 import {
   SCALES, SCALE_IDS, SECTORS, FRAMEWORK, PROJECT_STATUSES, STATUS_IDS, isFrameworkProject,
 } from './data/project-framework.js';
@@ -912,15 +916,19 @@ function validateSites(raw) {
 /**
  * Roughly where a ward is, so the map can open near it.
  *
- * There is no ward boundary data in this app -- polling units are names, not
- * shapes. What we do have is a GPS fix on every registration, so the average
- * of those is a decent centre for any ward with people in it. A ward with no
- * registrations yet returns nothing and the map falls back to a wider view.
+ * The GRID3 boundary's centroid when one is loaded (see grid3.js); otherwise
+ * the average GPS fix of people already registered in the ward. A ward with
+ * neither returns nothing and the map falls back to a wider view.
  */
 app.get('/api/geo/ward-centre', authenticate, wrap(async (req, res) => {
   const lga = String(req.query.lga || '').trim();
   const ward = String(req.query.ward || '').trim();
   if (!lga || !ward) return res.status(400).json({ error: 'Give an LGA and a ward' });
+
+  const boundary = await wardBoundary(lga, ward);
+  if (boundary?.lat != null) {
+    return res.json({ lat: boundary.lat, lng: boundary.lng, from: 'grid3', members: null });
+  }
 
   const row = await db.prepare(
     'SELECT AVG(lat) lat, AVG(lng) lng, COUNT(*) n FROM members '
@@ -931,6 +939,32 @@ app.get('/api/geo/ward-centre', authenticate, wrap(async (req, res) => {
     return res.json({ lat: null, lng: null, from: 'none', members: 0 });
   }
   res.json({ lat: row.lat, lng: row.lng, from: 'registrations', members: Number(row.n) });
+}));
+
+/**
+ * The GRID3 outline of a ward, for drawing on the project map. With lat/lng it
+ * also says whether that point is inside the ward.
+ */
+app.get('/api/geo/ward-boundary', authenticate, wrap(async (req, res) => {
+  const lga = String(req.query.lga || '').trim();
+  const ward = String(req.query.ward || '').trim();
+  if (!lga || !ward) return res.status(400).json({ error: 'Give an LGA and a ward' });
+  const boundary = await wardBoundary(lga, ward);
+  if (!boundary) return res.json({ found: false });
+  const lat = req.query.lat != null && req.query.lat !== '' ? Number(req.query.lat) : null;
+  const lng = req.query.lng != null && req.query.lng !== '' ? Number(req.query.lng) : null;
+  res.json({
+    found: true,
+    lga: boundary.lga,
+    ward: boundary.ward,
+    grid3_name: boundary.grid3_name,
+    grid3_code: boundary.grid3_code,
+    centre: boundary.lat != null ? { lat: boundary.lat, lng: boundary.lng } : null,
+    geometry: boundary.geometry,
+    source: boundary.source,
+    position: Number.isFinite(lat) && Number.isFinite(lng)
+      ? await wardPosition(lga, ward, lat, lng) : null,
+  });
 }));
 
 /** The picklists: 20 sectors x 3 scales x 6 projects, plus status options. */
@@ -1983,6 +2017,47 @@ app.post('/api/admin/voter-roll', authenticate, requireAdmin, upload.single('fil
     res.json({ ...result, total: voterRollSize() });
   }));
 
+/* --------------------------- GRID3 ward boundaries -------------------------- */
+
+app.get('/api/admin/grid3', authenticate, requireAdmin, wrap(async (_req, res) => {
+  res.json(await grid3Status());
+}));
+
+app.post('/api/admin/grid3/sync', authenticate, requireAdmin, wrap(async (req, res) => {
+  try {
+    const result = await syncFromGrid3();
+    await audit(req.user.id, req.user.username, 'grid3_synced', null, null,
+      { matched: result.matched, unmatched: result.unmatched.length }, ip(req));
+    res.status(result.ok ? 200 : 422).json({ ...result, status: await grid3Status() });
+  } catch (error) {
+    res.status(502).json({ error: 'Could not reach GRID3: ' + error.message
+      + '. Download the ward boundaries GeoJSON from data.grid3.org and upload it instead.' });
+  }
+}));
+
+// Its own uploader: GRID3's whole-of-Nigeria ward file is far larger than the
+// 8 MB evidence-photo limit, and it is read once and discarded.
+const geojsonUpload = multer({ dest: UPLOAD_DIR, limits: { fileSize: 300 * 1024 * 1024 } });
+
+app.post('/api/admin/grid3/upload', authenticate, requireAdmin, geojsonUpload.single('file'),
+  wrap(async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Attach a GeoJSON file' });
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(req.file.path, 'utf8'));
+    } catch {
+      return res.status(400).json({ error: 'That file is not valid GeoJSON' });
+    } finally {
+      fs.rm(req.file.path, { force: true }, () => {});
+    }
+    const features = data.type === 'FeatureCollection' ? data.features
+      : Array.isArray(data) ? data : [data];
+    const result = await loadFeatures(features, 'GRID3 upload: ' + (req.file.originalname || 'file'));
+    await audit(req.user.id, req.user.username, 'grid3_uploaded', null, null,
+      { matched: result.matched, unmatched: result.unmatched.length }, ip(req));
+    res.status(result.ok ? 200 : 422).json({ ...result, status: await grid3Status() });
+  }));
+
 app.post('/api/admin/voter-roll/clear', authenticate, requireAdmin, wrap(async (req, res) => {
   const n = clearVoterRoll();
   audit(req.user.id, req.user.username, 'voter_roll_cleared', null, null, { rows: n }, ip(req));
@@ -2293,6 +2368,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log('OYO 10X API listening on port ' + PORT);
   warnIfNotDurable();
   await maybeSeed();
+  await importGrassrootsOnce();
+  await syncGrid3IfEmpty();
   const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');
 });
