@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { db, nowISO, period as currentPeriod, audit, initSchema } from './db.js';
+import { db, nowISO, period as currentPeriod, audit, initSchema, phoneKeySql } from './db.js';
 import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
 import { externalRouter, generateApiKey } from './external.js';
@@ -15,6 +15,7 @@ import { makeLimiter } from './rate-limit.js';
 import { memberScope, scopedLgas, scopedWards } from './scope.js';
 import { storePublicFile, warnIfNotDurable } from './storage.js';
 import { importGrassrootsOnce } from './seed-grassroots.js';
+import { importApcIfEmpty } from './seed-apc.js';
 import { userArea, canTarget, taskAppliesTo } from './task-scope.js';
 import {
   wardBoundary, wardPosition, grid3Status, syncFromGrid3, loadFeatures, syncGrid3IfEmpty, lgaView,
@@ -1191,16 +1192,136 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 1000);
   const offset = Number(req.query.offset) || 0;
   const clause = where.join(' AND ');
+  // ?apc=yes|no -- is this member also on the APC register (same phone)?
+  // Appended after the column-prefixing below, which would mangle a.phone.
+  const apcOp = req.query.apc === 'yes' ? ' AND ' : req.query.apc === 'no' ? ' AND NOT ' : null;
+  const apcSql = (alias) => (apcOp == null ? ''
+    : apcOp + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = '
+      + phoneKeySql(alias + '.phone') + " AND a.phone_key <> '')");
 
-  const total = (await db.prepare('SELECT COUNT(*) n FROM members WHERE ' + clause).get(...params)).n;
+  const total = (await db.prepare('SELECT COUNT(*) n FROM members WHERE ' + clause
+    + apcSql('members')).get(...params)).n;
   const rows = await db.prepare(
-    'SELECT m.*, u.full_name upline_name, u.username upline_username '
+    'SELECT m.*, u.full_name upline_name, u.username upline_username, '
+    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = ' + phoneKeySql('m.phone')
+    + " AND a.phone_key <> '') apc_member "
     + 'FROM members m LEFT JOIN users u ON u.id = m.upline_user_id '
     + 'WHERE ' + clause.replace(/\b(id|status|lga|ward|level|first_name|last_name|phone|code|polling_unit|upline_user_id|upline_member_id)\b/g, 'm.$1')
+    + apcSql('m')
     + ' ORDER BY m.created_at DESC LIMIT ? OFFSET ?'
   ).all(...params, limit, offset);
 
   res.json({ total, limit, offset, rows });
+}));
+
+/* ------------------------------ APC register ------------------------------ */
+
+/**
+ * The APC membership register (see seed-apc.js), compared with the 10X
+ * network. "On 10X" means a 10X member (not rejected) has the same phone
+ * number, compared on the last 10 digits so formatting and the 0 / +234
+ * prefix do not matter. Names are never used to match.
+ *
+ * Administrators see the whole state; a candidate only their own
+ * jurisdiction. Field accounts have no access: this is 100,000+ people's
+ * names and phone numbers.
+ */
+function apcAreaClause(user) {
+  const area = userArea(user);
+  if (area.all) return { sql: '1=1', params: [] };
+  if (!area.places.length) return { sql: '1=0', params: [] };
+  const parts = []; const params = [];
+  for (const p of area.places) {
+    if (p.ward) { parts.push('(a.lga = ? AND a.ward = ?)'); params.push(p.lga, p.ward); }
+    else { parts.push('a.lga = ?'); params.push(p.lga); }
+  }
+  return { sql: '(' + parts.join(' OR ') + ')', params };
+}
+
+// Compared on the last 10 digits of the phone (see phoneKeySql in db.js), so
+// 0803..., +234 803... and 803... are the same person. Both sides indexed.
+const ON_10X = "(LENGTH(a.phone_key) = 10 AND EXISTS (SELECT 1 FROM members m WHERE "
+  + phoneKeySql('m.phone') + " = a.phone_key AND m.status <> 'rejected'))";
+
+app.get('/api/apc-members', authenticate, wrap(async (req, res) => {
+  if (!isAdminUser(req.user) && !isCandidateRole(req.user.role)) {
+    return res.status(403).json({ error: 'Only administrators and candidates can view the APC register' });
+  }
+  const area = apcAreaClause(req.user);
+  const where = [area.sql];
+  const params = [...area.params];
+  if (req.query.lga) { where.push('a.lga = ?'); params.push(req.query.lga); }
+  if (req.query.ward) { where.push('a.ward = ?'); params.push(req.query.ward); }
+  if (req.query.q) {
+    const like = '%' + String(req.query.q).trim() + '%';
+    where.push("(a.first_name ILIKE ? OR a.middle_name ILIKE ? OR a.last_name ILIKE ? "
+      + "OR a.phone ILIKE ? OR a.membership_no ILIKE ? OR (a.first_name || ' ' || a.last_name) ILIKE ?)");
+    params.push(like, like, like, like, like, like);
+    // A phone typed in any format (+234 803..., 0803-...) finds the record too.
+    const digits = String(req.query.q).replace(/\D/g, '').replace(/^(234|0)/, '');
+    if (digits.length >= 4) {
+      where[where.length - 1] = where[where.length - 1].slice(0, -1) + ' OR a.phone_key LIKE ?)';
+      params.push('%' + digits + '%');
+    }
+  }
+  const base = where.join(' AND ');
+  const on10x = req.query.on_10x === 'yes' ? ' AND ' + ON_10X
+    : req.query.on_10x === 'no' ? ' AND NOT ' + ON_10X : '';
+
+  const counts = await db.prepare(
+    'SELECT COUNT(*) total, SUM(CASE WHEN ' + ON_10X + ' THEN 1 ELSE 0 END) on_10x '
+    + 'FROM apc_members a WHERE ' + base
+  ).get(...params);
+  const total = Number(counts.total) || 0;
+  const onCount = Number(counts.on_10x) || 0;
+  const matching = req.query.on_10x === 'yes' ? onCount
+    : req.query.on_10x === 'no' ? total - onCount : total;
+
+  if (req.query.format === 'csv') {
+    const all = await db.prepare(
+      'SELECT a.membership_no, a.first_name, a.middle_name, a.last_name, a.phone, a.lga, '
+      + "COALESCE(a.ward, a.ward_raw) ward, a.registered_on, "
+      + "CASE WHEN " + ON_10X + " THEN 'yes' ELSE 'no' END on_10x "
+      + 'FROM apc_members a WHERE ' + base + on10x + ' ORDER BY a.lga, a.ward, a.last_name, a.first_name'
+    ).all(...params);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="apc-register.csv"');
+    audit(req.user.id, req.user.username, 'export_apc_register', null, null,
+      { rows: all.length, on_10x: req.query.on_10x || 'all' }, ip(req));
+    return res.send(toCSV(all, ['membership_no', 'first_name', 'middle_name', 'last_name', 'phone',
+      'lga', 'ward', 'registered_on', 'on_10x']));
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const rows = await db.prepare(
+    'SELECT a.* FROM apc_members a WHERE ' + base + on10x
+    + ' ORDER BY a.lga, a.ward, a.last_name, a.first_name, a.id LIMIT ? OFFSET ?'
+  ).all(...params, limit, offset);
+
+  // Who each person is in 10X, for the rows on this page only.
+  const keys = [...new Set(rows.map((r) => r.phone_key).filter((k) => k && k.length === 10))];
+  const linked = keys.length ? await db.prepare(
+    'SELECT id, code, first_name, last_name, level, status, ' + phoneKeySql('phone') + ' phone_key '
+    + "FROM members WHERE status <> 'rejected' AND " + phoneKeySql('phone')
+    + ' IN (' + keys.map(() => '?').join(',') + ')'
+  ).all(...keys) : [];
+  const byPhone = new Map();
+  for (const m of linked) if (!byPhone.has(m.phone_key)) byPhone.set(m.phone_key, m);
+
+  res.json({
+    total: matching, limit, offset,
+    summary: { total, on_10x: onCount, not_on_10x: total - onCount },
+    rows: rows.map((r) => {
+      const m = r.phone_key && r.phone_key.length === 10 ? byPhone.get(r.phone_key) : null;
+      return {
+        ...r,
+        on_10x: !!m,
+        member: m ? { id: m.id, code: m.code, name: m.first_name + ' ' + m.last_name,
+          level: m.level, status: m.status } : null,
+      };
+    }),
+  });
 }));
 
 app.get('/api/members/:id', authenticate, wrap(async (req, res) => {
@@ -1719,7 +1840,9 @@ app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
     + ' (SELECT upline_user_id FROM members m WHERE m.id = users.member_id)) upline_name,'
     + '(SELECT username FROM users parent WHERE parent.id = '
     + ' (SELECT upline_user_id FROM members m WHERE m.id = users.member_id)) upline_username,'
-    + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered '
+    + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered, '
+    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = ' + phoneKeySql('users.phone')
+    + " AND a.phone_key <> '') apc_member "
     + 'FROM users ORDER BY role, full_name'
   ).all();
   res.json({ rows });
@@ -2412,6 +2535,7 @@ app.listen(PORT, '0.0.0.0', async () => {
   warnIfNotDurable();
   await maybeSeed();
   await importGrassrootsOnce();
+  await importApcIfEmpty();
   await syncGrid3IfEmpty();
   const users = (await db.prepare('SELECT COUNT(*) n FROM users').get()).n;
   if (!users) console.log('No users yet -- run:  npm run seed');

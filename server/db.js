@@ -12,6 +12,14 @@ import pg from 'pg';
 
 const { Pool, types } = pg;
 
+/**
+ * SQL for comparing phone numbers: the last 10 digits, ignoring spaces,
+ * dashes, a leading 0 or a +234/234 prefix. 08031234567, +234 803 123 4567
+ * and 803-123-4567 all give 8031234567. Indexed on members and apc_members.
+ */
+export const phoneKeySql = (col) =>
+  "RIGHT(REGEXP_REPLACE(COALESCE(" + col + ", ''), '[^0-9]', '', 'g'), 10)";
+
 
 types.setTypeParser(types.builtins.INT8, (value) => parseInt(value, 10));
 types.setTypeParser(types.builtins.NUMERIC, (value) => parseFloat(value));
@@ -407,6 +415,25 @@ CREATE TABLE IF NOT EXISTS api_keys (
   revoked_at   TEXT
 );
 
+-- APC membership register for Oyo State, loaded from the party's LGA export
+-- (see seed-apc.js). Read-only reference data: it is compared with the 10X
+-- network by phone number, never merged into members.
+CREATE TABLE IF NOT EXISTS apc_members (
+  id            SERIAL PRIMARY KEY,
+  membership_no TEXT,
+  first_name    TEXT,
+  middle_name   TEXT,
+  last_name     TEXT,
+  phone         TEXT,
+  lga           TEXT NOT NULL,
+  ward          TEXT,
+  ward_raw      TEXT,
+  registered_on TEXT,
+  phone_key     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_apc_phone ON apc_members(phone);
+CREATE INDEX IF NOT EXISTS idx_apc_geo ON apc_members(lga, ward);
+
 -- GRID3 ward boundaries, matched to the ward names in geo.js (see grid3.js).
 CREATE TABLE IF NOT EXISTS grid3_wards (
   lga        TEXT NOT NULL,
@@ -439,6 +466,12 @@ CREATE TABLE IF NOT EXISTS grid3_wards (
   ]) {
     await db.exec('ALTER TABLE ' + table + ' ADD COLUMN IF NOT EXISTS ' + column + ' ' + type);
   }
+
+  // Phone matching (APC register vs 10X) compares the last 10 digits.
+  await db.exec('ALTER TABLE apc_members ADD COLUMN IF NOT EXISTS phone_key TEXT');
+  await db.exec('UPDATE apc_members SET phone_key = ' + phoneKeySql('phone') + ' WHERE phone_key IS NULL');
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_apc_phone_key ON apc_members(phone_key)');
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_members_phone_key ON members ((' + phoneKeySql('phone') + '))');
 
   await loadTablesWithId();
 
