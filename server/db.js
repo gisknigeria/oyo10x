@@ -407,6 +407,24 @@ CREATE TABLE IF NOT EXISTS api_keys (
   revoked_at   TEXT
 );
 
+-- APC membership register for Oyo State, loaded from the party's LGA export
+-- (see seed-apc.js). Read-only reference data: it is compared with the 10X
+-- network by phone number, never merged into members.
+CREATE TABLE IF NOT EXISTS apc_members (
+  id            SERIAL PRIMARY KEY,
+  membership_no TEXT,
+  first_name    TEXT,
+  middle_name   TEXT,
+  last_name     TEXT,
+  phone         TEXT,
+  lga           TEXT NOT NULL,
+  ward          TEXT,
+  ward_raw      TEXT,
+  registered_on TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_apc_phone ON apc_members(phone);
+CREATE INDEX IF NOT EXISTS idx_apc_geo ON apc_members(lga, ward);
+
 -- GRID3 ward boundaries, matched to the ward names in geo.js (see grid3.js).
 CREATE TABLE IF NOT EXISTS grid3_wards (
   lga        TEXT NOT NULL,

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, downloadCsvPost, num, timeAgo, ROLE_LABEL, normalizeRole } from '../lib/api.js';
 import { Card, Status, Loading, Empty, Alert, Field, Modal, Stat } from '../components/ui.jsx';
 import { useAuth } from '../App.jsx';
+import ApcRegister from '../components/ApcRegister.jsx';
 
 const ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot'];
 const EDIT_ROLES = ['candidate', 'admin', 'campaign_admin', 'unit_promoter', 'grassroot', 'mobiliser'];
@@ -700,6 +701,7 @@ export default function Users() {
   const [promoting, setPromoting] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [q, setQ] = useState('');
+  const [apcFilter, setApcFilter] = useState('');
   const isDg = normalizeRole(me.user.role) === 'campaign_admin';
 
   const load = () => api.get('/users').then((d) => setRows(d.rows)).catch((e) => setError(e.message));
@@ -746,7 +748,9 @@ export default function Users() {
   };
 
   const filtered = rows.filter((u) =>
-    tabFilter(u) && (!q || (u.username + ' ' + u.full_name + ' ' + (u.scope_value || ''))
+    tabFilter(u)
+    && (!apcFilter || (apcFilter === 'yes') === Boolean(u.apc_member))
+    && (!q || (u.username + ' ' + u.full_name + ' ' + (u.scope_value || ''))
       .toLowerCase().includes(q.toLowerCase())));
 
   const counts = {
@@ -803,17 +807,25 @@ export default function Users() {
           ['candidate', 'Candidates', counts.candidate],
           ['unit_promoter', 'Nominees', counts.unit_promoter],
           ['grassroot', 'Grassroots', counts.grassroots],
+          ['apc', 'APC register', null],
         ].map(([value, label, count]) => (
           <button key={value} className={'pill' + (tab === value ? ' active' : '')}
                   onClick={() => setTab(value)}>
-            {label} <span className="badge tiny">{count}</span>
+            {label} {count != null && <span className="badge tiny">{count}</span>}
           </button>
         ))}
       </div>
 
+      {tab === 'apc' ? <ApcRegister geo={geo} /> : (<>
+
       <div className="toolbar">
         <input type="text" placeholder="Search username, name or constituency"
                value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 280 }} />
+        <select value={apcFilter} onChange={(e) => setApcFilter(e.target.value)} style={{ width: 'auto' }}>
+          <option value="">APC list: any</option>
+          <option value="yes">On the APC list</option>
+          <option value="no">Not on the APC list</option>
+        </select>
         <div className="spacer" />
         <button className="btn sm secondary" onClick={() => setExporting(true)}>
           Export credentials
@@ -839,7 +851,10 @@ export default function Users() {
                 {filtered.map((u) => (
                   <tr key={u.id}>
                     <td className="mono" style={{ fontWeight: 600 }}>{u.username}</td>
-                    <td>{u.full_name}</td>
+                    <td>
+                      {u.full_name}
+                      {u.apc_member ? <span className="badge green" style={{ marginLeft: 6 }}>APC</span> : null}
+                    </td>
                     <td>
                       <span className="badge">{ROLE_LABEL[u.role] || u.role}</span>
                       {u.is_coordinator ? (
@@ -918,6 +933,7 @@ export default function Users() {
           </div>
         )}
       </Card>
+      </>)}
     </>
   );
 }

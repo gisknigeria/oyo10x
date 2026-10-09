@@ -171,3 +171,18 @@ GeoJSON downloaded from data.grid3.org.
 |---|---|---|
 | `GRID3_WARDS_URL` | GRID3 NGA operational wards FeatureServer layer | Where *Sync* reads from |
 | `GRID3_SYNC_ON_BOOT` | on | Set `0` to skip the boot sync |
+
+## APC membership register
+
+`server/data/apc-members.csv.gz` holds the APC all-LGA membership export
+(112,268 people after de-duplication). On boot, if the `apc_members` table is
+empty, the server loads it. **Platform accounts → APC register** lists them
+with an *Also on 10X / Not on 10X yet* filter (matched on phone number) and a
+CSV export. Admins see the whole state; candidates only their own area; field
+accounts have no access.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `APC_IMPORT_ON_BOOT` | on | Set `0` to skip the boot load |
+
+Reload by hand with `npm run seed:apc -- --replace` after replacing the file.
