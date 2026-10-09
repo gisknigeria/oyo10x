@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { db, nowISO, period as currentPeriod, audit, initSchema } from './db.js';
+import { db, nowISO, period as currentPeriod, audit, initSchema, phoneKeySql } from './db.js';
 import { dashboardReport } from './dashboard-report.js';
 import { taskReport } from './task-report.js';
 import { externalRouter, generateApiKey } from './external.js';
@@ -1196,13 +1196,15 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
   // Appended after the column-prefixing below, which would mangle a.phone.
   const apcOp = req.query.apc === 'yes' ? ' AND ' : req.query.apc === 'no' ? ' AND NOT ' : null;
   const apcSql = (alias) => (apcOp == null ? ''
-    : apcOp + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone = ' + alias + '.phone)');
+    : apcOp + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = '
+      + phoneKeySql(alias + '.phone') + " AND a.phone_key <> '')");
 
   const total = (await db.prepare('SELECT COUNT(*) n FROM members WHERE ' + clause
     + apcSql('members')).get(...params)).n;
   const rows = await db.prepare(
     'SELECT m.*, u.full_name upline_name, u.username upline_username, '
-    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone = m.phone) apc_member '
+    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = ' + phoneKeySql('m.phone')
+    + " AND a.phone_key <> '') apc_member "
     + 'FROM members m LEFT JOIN users u ON u.id = m.upline_user_id '
     + 'WHERE ' + clause.replace(/\b(id|status|lga|ward|level|first_name|last_name|phone|code|polling_unit|upline_user_id|upline_member_id)\b/g, 'm.$1')
     + apcSql('m')
@@ -1216,9 +1218,9 @@ app.get('/api/members', authenticate, wrap(async (req, res) => {
 
 /**
  * The APC membership register (see seed-apc.js), compared with the 10X
- * network. "On 10X" means a 10X member (not rejected) shares the person's
- * phone number -- phones are normalised the same way on both sides, so this is
- * an exact match, not a guess on names.
+ * network. "On 10X" means a 10X member (not rejected) has the same phone
+ * number, compared on the last 10 digits so formatting and the 0 / +234
+ * prefix do not matter. Names are never used to match.
  *
  * Administrators see the whole state; a candidate only their own
  * jurisdiction. Field accounts have no access: this is 100,000+ people's
@@ -1236,7 +1238,10 @@ function apcAreaClause(user) {
   return { sql: '(' + parts.join(' OR ') + ')', params };
 }
 
-const ON_10X = "EXISTS (SELECT 1 FROM members m WHERE m.phone = a.phone AND m.status <> 'rejected')";
+// Compared on the last 10 digits of the phone (see phoneKeySql in db.js), so
+// 0803..., +234 803... and 803... are the same person. Both sides indexed.
+const ON_10X = "(LENGTH(a.phone_key) = 10 AND EXISTS (SELECT 1 FROM members m WHERE "
+  + phoneKeySql('m.phone') + " = a.phone_key AND m.status <> 'rejected'))";
 
 app.get('/api/apc-members', authenticate, wrap(async (req, res) => {
   if (!isAdminUser(req.user) && !isCandidateRole(req.user.role)) {
@@ -1252,6 +1257,12 @@ app.get('/api/apc-members', authenticate, wrap(async (req, res) => {
     where.push("(a.first_name ILIKE ? OR a.middle_name ILIKE ? OR a.last_name ILIKE ? "
       + "OR a.phone ILIKE ? OR a.membership_no ILIKE ? OR (a.first_name || ' ' || a.last_name) ILIKE ?)");
     params.push(like, like, like, like, like, like);
+    // A phone typed in any format (+234 803..., 0803-...) finds the record too.
+    const digits = String(req.query.q).replace(/\D/g, '').replace(/^(234|0)/, '');
+    if (digits.length >= 4) {
+      where[where.length - 1] = where[where.length - 1].slice(0, -1) + ' OR a.phone_key LIKE ?)';
+      params.push('%' + digits + '%');
+    }
   }
   const base = where.join(' AND ');
   const on10x = req.query.on_10x === 'yes' ? ' AND ' + ON_10X
@@ -1289,19 +1300,20 @@ app.get('/api/apc-members', authenticate, wrap(async (req, res) => {
   ).all(...params, limit, offset);
 
   // Who each person is in 10X, for the rows on this page only.
-  const phones = [...new Set(rows.map((r) => r.phone).filter(Boolean))];
-  const linked = phones.length ? await db.prepare(
-    'SELECT id, code, first_name, last_name, level, status, phone FROM members '
-    + "WHERE status <> 'rejected' AND phone IN (" + phones.map(() => '?').join(',') + ')'
-  ).all(...phones) : [];
+  const keys = [...new Set(rows.map((r) => r.phone_key).filter((k) => k && k.length === 10))];
+  const linked = keys.length ? await db.prepare(
+    'SELECT id, code, first_name, last_name, level, status, ' + phoneKeySql('phone') + ' phone_key '
+    + "FROM members WHERE status <> 'rejected' AND " + phoneKeySql('phone')
+    + ' IN (' + keys.map(() => '?').join(',') + ')'
+  ).all(...keys) : [];
   const byPhone = new Map();
-  for (const m of linked) if (!byPhone.has(m.phone)) byPhone.set(m.phone, m);
+  for (const m of linked) if (!byPhone.has(m.phone_key)) byPhone.set(m.phone_key, m);
 
   res.json({
     total: matching, limit, offset,
     summary: { total, on_10x: onCount, not_on_10x: total - onCount },
     rows: rows.map((r) => {
-      const m = byPhone.get(r.phone);
+      const m = r.phone_key && r.phone_key.length === 10 ? byPhone.get(r.phone_key) : null;
       return {
         ...r,
         on_10x: !!m,
@@ -1829,7 +1841,8 @@ app.get('/api/users', authenticate, requireAdmin, wrap(async (req, res) => {
     + '(SELECT username FROM users parent WHERE parent.id = '
     + ' (SELECT upline_user_id FROM members m WHERE m.id = users.member_id)) upline_username,'
     + '(SELECT COUNT(*) FROM members m WHERE m.upline_user_id = users.id) registered, '
-    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone = users.phone) apc_member '
+    + 'EXISTS (SELECT 1 FROM apc_members a WHERE a.phone_key = ' + phoneKeySql('users.phone')
+    + " AND a.phone_key <> '') apc_member "
     + 'FROM users ORDER BY role, full_name'
   ).all();
   res.json({ rows });

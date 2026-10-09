@@ -177,7 +177,7 @@ GeoJSON downloaded from data.grid3.org.
 `server/data/apc-members.csv.gz` holds the APC all-LGA membership export
 (112,268 people after de-duplication). On boot, if the `apc_members` table is
 empty, the server loads it. **Platform accounts → APC register** lists them
-with an *Also on 10X / Not on 10X yet* filter (matched on phone number) and a
+with an *Also on 10X / Not on 10X yet* filter (matched on the last 10 digits of the phone number, so 0803..., +234 803... and 803... are the same person) and a
 CSV export. Admins see the whole state; candidates only their own area; field
 accounts have no access.
 

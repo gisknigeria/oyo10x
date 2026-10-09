@@ -107,7 +107,7 @@ export default function ApcRegister({ geo }) {
       </div>
 
       <Card title={data ? num(data.total) + ' APC member' + (data.total === 1 ? '' : 's') : 'APC register'}
-            note="Matched to 10X by phone number. Loaded from the APC all-LGA membership export."
+            note="Matched to 10X on the last 10 digits of the phone number, so 0803…, +234 803… and 803… count as the same person."
             bodyClass="">
         {loading && !data ? <Loading label="Loading the APC register" /> : !data || data.rows.length === 0 ? (
           <Empty title="Nobody matches these filters" />

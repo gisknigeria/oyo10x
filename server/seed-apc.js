@@ -8,8 +8,8 @@
 // It also runs by itself, once, when the server boots (see index.js). The
 // file was built from APC_ALL_LOCAL_GOVERNMENT__MEMBERSHIP_DATA_4.xlsx: three
 // different column layouts normalised, blank rows dropped, duplicate
-// membership numbers kept once, phones normalised exactly as members.phone is
-// (so the 10X match is a plain equality), and wards matched to geo.js names.
+// membership numbers kept once, phones normalised, and wards matched to
+// geo.js names. phone_key (last 10 digits) is what the 10X match compares.
 // `ward` is empty where the sheet's ward could not be matched; `ward_raw`
 // always keeps what the sheet said.
 
@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import zlib from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, initSchema, audit } from './db.js';
+import { db, initSchema, audit, phoneKeySql } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FILE = path.join(__dirname, 'data', 'apc-members.csv.gz');
@@ -61,6 +61,8 @@ export async function importApc({ replace = false, log = console.log } = {}) {
         + chunk.map(() => one).join(',')
       ).run(...chunk.flat().map((v) => (v === '' ? null : v)));
     }
+    await tx.prepare('UPDATE apc_members SET phone_key = ' + phoneKeySql('phone')
+      + ' WHERE phone_key IS NULL').run();
   });
   await audit(null, 'system', 'apc_import', null, null, { rows: rows.length, replace });
   log('APC register: loaded ' + rows.length + ' members.');
